@@ -62,5 +62,8 @@ Colores: white, blk, red, orange, navy, teal, binB (azul), binY (amarillo), hpw 
 Emisivos: lamp, lcool, screenM, exit, orangeL.
 Exterior: grass, asphalt, pave, sidewalk, tactile, soil, composite.
 
+# Puntos señalados por el usuario
+El usuario puede marcar puntos en el visor con el puntero. Te llegan al final del mensaje como «[Puntos señalados en el visor]», con número, zona, planta, coordenadas de edificio (X, Y, Z), material de la superficie tocada (clave de MAT) y hacia dónde mira esa cara. Normalmente va también una captura de su vista con los números dibujados. «Aquí», «esto» o «el punto 2» se refieren a esas marcas. Úsalas para localizar el objeto en el código (busca por coordenadas cercanas o por el material) y para colocar cosas nuevas. Una superficie con cara superior es un suelo o un tablero; una cara lateral es una pared o un frente.
+
 # Rendimiento
 Prefiere box()/ob() (geometría fusionada) a mallas sueltas. No añadas luces con sombra. Evita más de ~10 PointLight nuevas.`;

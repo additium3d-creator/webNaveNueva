@@ -20,7 +20,7 @@ function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = fals
 /* ---------- visor ---------- */
 function loadViewer(url, keepPose) {
   if (keepPose) { try { st.pose = viewer.contentWindow.__nave.getPose(); } catch { st.pose = null; } } else st.pose = null;
-  $('#loading').hidden = false; $('#sceneErr').hidden = true;
+  $('#loading').hidden = false; $('#sceneErr').hidden = true; if (st.points?.length) { st.points = []; renderPins(); }
   viewer.src = `${url}?embed=1&t=${Date.now()}`;
 }
 window.addEventListener('message', e => {
@@ -80,16 +80,16 @@ async function ensureSession() {
   st.sess = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ author: st.author, baseVersion: st.view }) });
   return st.sess;
 }
-async function send(text) {
+async function send(text, image) {
   text = text.trim(); if (!text || st.busy) return;
   st.lastActivity = Date.now();
   try { await ensureSession(); } catch (e) { if (e.message !== 'auth') add('msg err', esc(e.message)); return; }
-  add('msg user', esc(text));
+  add('msg user', image ? `<span class="meta">Con puntos señalados y captura de la vista</span>${esc(text)}` : esc(text));
   const steps = add('steps', ''); let live = null;
   const step = t => { live?.classList.remove('live'); live = document.createElement('div'); live.className = 'live'; live.textContent = t; steps.appendChild(live); log.scrollTop = log.scrollHeight; };
   st.busy = true; updateState(); step('enviando');
   try {
-    const r = await fetch(`/api/sessions/${st.sess.id}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-access-code': st.code }, body: JSON.stringify({ text }) });
+    const r = await fetch(`/api/sessions/${st.sess.id}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-access-code': st.code }, body: JSON.stringify({ text, image }) });
     if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `Error ${r.status}`); }
     const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
     for (;;) {
@@ -113,7 +113,16 @@ async function send(text) {
   } catch (e) { if (e.message !== 'auth') add('msg err', `<span class="meta">Error</span>${esc(e.message)}`); }
   live?.classList.remove('live'); st.busy = false; st.lastActivity = Date.now(); updateState();
 }
-$('#composer').addEventListener('submit', e => { e.preventDefault(); const t = msg.value; msg.value = ''; autosize(); send(t); });
+$('#composer').addEventListener('submit', e => {
+  e.preventDefault(); let t = msg.value.trim(); let image = null;
+  if (st.points.length) {
+    if (!t) t = 'Fíjate en los puntos que he señalado.';
+    t += '\n\n[Puntos señalados en el visor]\n' + st.points.map(p => `${p.idx}) ${p.zone} · X=${p.X.toFixed(2)} Y=${p.Y.toFixed(2)} Z=${p.Z.toFixed(2)} · superficie: ${p.mat || 'sin material identificado'}${p.face ? ' · ' + p.face : ''}`).join('\n');
+    try { image = capture(); } catch {}
+    clearPins();
+  }
+  msg.value = ''; autosize(); setPick(false); send(t, image);
+});
 msg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); } });
 function autosize() { msg.style.height = 'auto'; msg.style.height = Math.min(140, msg.scrollHeight) + 'px'; }
 msg.addEventListener('input', autosize);
@@ -174,6 +183,65 @@ $('#vlist').addEventListener('click', async e => {
 });
 $('#btnHist').onclick = () => { $('#hist').hidden = !$('#hist').hidden; };
 $('#histClose').onclick = () => ($('#hist').hidden = true);
+
+/* ---------- señalar puntos en el visor ---------- */
+st.points = [];
+const ZONES = [['Almacén y taller', 0, 0.3, 13.46, 0.3, 16.9], ['Impresión polvo', 0, 13.67, 35.3, 8.81, 16.9], ['Procesado SLS', 0, 13.67, 17.5, 0.3, 8.71], ['Procesado HP', 0, 17.6, 26.2, 0.3, 8.71],
+  ['Sala polivalente', 0, 26.3, 35.29, 0.3, 8.71], ['Baños PB', 0, 35.4, 39.19, 11.83, 16.9], ['Vestíbulo', 0, 35.4, 39.19, 8.71, 11.83], ['Sala de muestras', 0, 39.19, 43.94, 8.43, 16.9], ['Hall / showroom', 0, 35.39, 43.94, 0.3, 8.43],
+  ['Resina', 1, 22.01, 26.43, 0.3, 8.71], ['Oficina de trabajadores', 1, 26.53, 35.3, 0.3, 8.71], ['Despacho de dirección', 1, 39.19, 43.94, 8.48, 16.9], ['Baño y vestuario', 1, 34, 39.91, 14.78, 16.9],
+  ['Galería', 1, 35.3, 36.43, 3.79, 8.43], ['Vacío del showroom', 1, 36.43, 43.94, 0.3, 8.43], ['Mesa de juntas', 1, 35.9, 39.19, 9.6, 14.78], ['Granja Bambu', 1, 12.01, 39.19, 0.3, 16.9], ['Vacío de la nave', 1, 0, 12.01, 0, 17.2]];
+const LEVELS = ['planta baja', 'planta primera', 'cubierta'];
+function zoneAt(x, y, z) {
+  if (x < 0 || x > 43.95 || y < 0 || y > 17.21) return 'Exterior';
+  const lv = z < 3.2 ? 0 : z < 6.6 ? 1 : 2;
+  if (lv === 2) return 'Cubierta / terraza';
+  const q = ZONES.find(q => q[1] === lv && x >= q[2] && x <= q[3] && y >= q[4] && y <= q[5]);
+  return `${q ? q[0] : 'Sin zona'} · ${LEVELS[lv]}`;
+}
+function faceName(n) {
+  const x = n.x, y = -n.z, z = n.y;
+  if (Math.abs(z) > .7) return z > 0 ? 'cara superior (suelo o tablero)' : 'cara inferior (techo)';
+  return Math.abs(x) > Math.abs(y) ? (x > 0 ? 'cara que mira a +X (hacia la fachada)' : 'cara que mira a −X (hacia el fondo)') : (y > 0 ? 'cara que mira a +Y (lateral derecho)' : 'cara que mira a −Y (lateral izquierdo)');
+}
+function setPick(on) {
+  if (on) { const N = viewer.contentWindow?.__nave; if (!N?.scene) return toast('Espera a que cargue la escena para señalar.'); try { viewer.contentWindow.document.exitPointerLock?.(); } catch {} }
+  $('#pick').hidden = !on; $('#btnPick').classList.toggle('on', on);
+}
+$('#btnPick').onclick = () => setPick($('#pick').hidden);
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#pick').hidden) setPick(false); });
+$('#pick').addEventListener('click', e => {
+  const w = viewer.contentWindow, N = w.__nave, T = w.THREE; if (!N?.scene) return;
+  const r = viewer.getBoundingClientRect();
+  const rc = new T.Raycaster(); rc.setFromCamera(new T.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), N.camera);
+  const hit = rc.intersectObjects(N.scene.children, true).find(h => h.distance < 400 && !h.object.userData.pin && !(h.object.material?.transparent && (h.object.material.opacity ?? 1) < .45));
+  if (!hit) return toast('Ahí no hay nada que señalar.');
+  const p = hit.point, X = p.x, Y = -p.z, Z = p.y, idx = (st.points.at(-1)?.idx || 0) + 1;
+  const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : null;
+  const mat = Object.keys(N.MAT || {}).find(k => N.MAT[k] === hit.object.material) || '';
+  const c = w.document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+  g.fillStyle = '#1ec29b'; g.beginPath(); g.arc(64, 64, 54, 0, 7); g.fill(); g.lineWidth = 9; g.strokeStyle = '#fff'; g.stroke();
+  g.fillStyle = '#00140e'; g.font = 'bold 66px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(idx), 64, 69);
+  const sp = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(c), depthTest: false, transparent: true }));
+  sp.renderOrder = 999; sp.userData.pin = true; sp.scale.set(.34, .34, 1); sp.position.copy(p); if (n) sp.position.addScaledVector(n, .14); N.scene.add(sp);
+  st.points.push({ idx, X, Y, Z, zone: zoneAt(X, Y, Z), mat, face: n ? faceName(n) : '', sprite: sp });
+  renderPins(); msg.focus();
+});
+function renderPins() {
+  $('#pins').innerHTML = st.points.map(p => `<span class="pin"><b>${p.idx}</b><span>${esc(p.zone)} · X ${p.X.toFixed(2)} Y ${p.Y.toFixed(2)} Z ${p.Z.toFixed(2)}${p.mat ? ' · ' + esc(p.mat) : ''}</span><button type="button" data-unpin="${p.idx}" aria-label="Quitar punto ${p.idx}">✕</button></span>`).join('');
+}
+$('#pins').addEventListener('click', e => {
+  const b = e.target.closest('[data-unpin]'); if (!b) return;
+  const i = st.points.findIndex(p => p.idx === +b.dataset.unpin); if (i < 0) return;
+  try { st.points[i].sprite.parent?.remove(st.points[i].sprite); } catch {}
+  st.points.splice(i, 1); renderPins();
+});
+function clearPins() { for (const p of st.points) { try { p.sprite.parent?.remove(p.sprite); } catch {} } st.points = []; renderPins(); }
+function capture() {
+  const N = viewer.contentWindow.__nave; N.renderer.render(N.scene, N.camera);
+  const src = N.renderer.domElement, W = 1024, H = Math.round(src.height / src.width * W);
+  const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(src, 0, 0, W, H);
+  return c.toDataURL('image/jpeg', .82);
+}
 
 /* ---------- modales: acceso y nombre ---------- */
 function modal(html, wide) { $('#modalBody').innerHTML = html; $('#modal .sheet').classList.toggle('wide', !!wide); $('#modal').hidden = false; $('#modal').querySelectorAll('[data-close]').forEach(b => b.onclick = closeModal); $('#modal').querySelector('input,textarea')?.focus(); }

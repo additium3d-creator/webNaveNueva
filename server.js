@@ -108,7 +108,7 @@ const toolLabel = (n, i) => ({
   reemplazar: 'editando la escena', insertar: `insertando tras la línea ${i.despues_de_linea}`, comprobar: 'comprobando la sintaxis'
 }[n] || n);
 
-async function runAgent(sess, instruction, send) {
+async function runAgent(sess, instruction, send, image) {
   const ctx = { src: await currentDraft(sess), edits: 0, checked: false, lastErrors: [] };
   if (MOCK) {
     send({ type: 'tool', text: 'modo demostración: sin clave de API' });
@@ -120,7 +120,8 @@ async function runAgent(sess, instruction, send) {
     return { text: `Modo demostración (no hay ANTHROPIC_API_KEY): he añadido un bloque rojo en el hall para probar el flujo de versiones.${errs.length ? ' Error: ' + errs[0] : ''}`, ctx };
   }
   const history = sess.history.slice(-8).flatMap(h => [{ role: 'user', content: h.user }, { role: 'assistant', content: h.assistant }]);
-  const messages = [...history, { role: 'user', content: instruction }];
+  const first = image ? [{ type: 'image', source: { type: 'base64', media_type: image.slice(5, image.indexOf(';')), data: image.slice(image.indexOf(',') + 1) } }, { type: 'text', text: instruction }] : instruction;
+  const messages = [...history, { role: 'user', content: first }];
   let finalText = '', fixes = 0;
   for (let step = 0; step < MAX_STEPS; step++) {
     const r = await anthropic.messages.create({
@@ -156,13 +157,14 @@ async function runAgent(sess, instruction, send) {
 
 /* ---------------- servidor ---------------- */
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '8mb' }));
 const cookieCode = req => decodeURIComponent((req.headers.cookie || '').split(/;\s*/).find(c => c.startsWith('nave_ac='))?.slice(8) || '');
 const authed = req => !ACCESS_CODE || req.get('x-access-code') === ACCESS_CODE || cookieCode(req) === ACCESS_CODE;
 const guard = (req, res, next) => (authed(req) ? next() : res.status(401).json({ error: 'Código de acceso incorrecto.' }));
 const hits = new Map();
 const rate = (req, res, next) => { const k = req.ip, now = Date.now(), h = (hits.get(k) || []).filter(t => now - t < 3600e3); if (h.length >= 60) return res.status(429).json({ error: 'Demasiadas peticiones en la última hora.' }); h.push(now); hits.set(k, h); next(); };
 
+const expose = html => html.replace('window.__nave={stats,', 'window.__nave={stats,scene,camera,renderer,MAT,THREE,');
 const wrap = fn => (req, res) => Promise.resolve(fn(req, res)).catch(e => { console.error(e); if (!res.headersSent) res.status(500).json({ error: e.message }); });
 app.get('/api/config', wrap(async (req, res) => res.json({ model: MODEL, mock: MOCK, storage: store.kind, requiresCode: !!ACCESS_CODE, authed: authed(req), latest: (await store.listVersions()).at(-1)?.id })));
 app.post('/api/login', (req, res) => {
@@ -181,8 +183,8 @@ app.get('/api/changelog', guard, wrap(async (_q, res) => {
   const md = (await store.listVersions()).reverse().map(v => `## v${v.id} · ${v.title}\n${v.createdAt} · ${v.author}${v.parent ? ` · basada en v${v.parent}` : ''}\n${v.notes ? v.notes + '\n' : ''}${v.instructions.map(i => `- ${i.instruction}`).join('\n')}`).join('\n\n');
   res.type('text/markdown').send(`# Historial · Nave Da Vinci 16\n\n${md}\n`);
 }));
-app.get('/scene/v/:id', guard, wrap(async (req, res) => { const t = await store.getScene(+req.params.id | 0); if (t == null) return res.status(404).send('No existe'); res.type('html').set('Cache-Control', 'no-store').send(t); }));
-app.get('/scene/s/:sid', guard, wrap(async (req, res) => { const s = await loadSession(req.params.sid); if (!s) return res.status(404).send('No existe'); res.type('html').set('Cache-Control', 'no-store').send(await currentDraft(s)); }));
+app.get('/scene/v/:id', guard, wrap(async (req, res) => { const t = await store.getScene(+req.params.id | 0); if (t == null) return res.status(404).send('No existe'); res.type('html').set('Cache-Control', 'no-store').send(expose(t)); }));
+app.get('/scene/s/:sid', guard, wrap(async (req, res) => { const s = await loadSession(req.params.sid); if (!s) return res.status(404).send('No existe'); res.type('html').set('Cache-Control', 'no-store').send(expose(await currentDraft(s))); }));
 
 app.post('/api/sessions', guard, wrap(async (req, res) => {
   const list = await store.listVersions();
@@ -197,7 +199,8 @@ app.get('/api/sessions/:sid', guard, wrap(async (req, res) => { const s = await 
 const busy = new Set();
 app.post('/api/sessions/:sid/message', guard, rate, async (req, res) => {
   let s; try { s = await loadSession(req.params.sid); } catch (e) { return res.status(500).json({ error: e.message }); }
-  const text = String(req.body?.text || '').trim().slice(0, 4000);
+  const text = String(req.body?.text || '').trim().slice(0, 6000);
+  const img = typeof req.body?.image === 'string' && /^data:image\/(jpeg|png);base64,/.test(req.body.image) && req.body.image.length < 6e6 ? req.body.image : null;
   if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
   if (!text) return res.status(400).json({ error: 'Mensaje vacío.' });
   if (busy.has(s.id)) return res.status(409).json({ error: 'Esta sesión ya está procesando un cambio.' });
@@ -207,7 +210,7 @@ app.post('/api/sessions/:sid/message', guard, rate, async (req, res) => {
   const ping = setInterval(() => res.write(': ping\n\n'), 15000);
   try {
     send({ type: 'tool', text: MOCK ? 'preparando' : `pensando con ${MODEL}` });
-    const { text: answer, ctx } = await runAgent(s, text, send);
+    const { text: answer, ctx } = await runAgent(s, text, send, img);
     const changed = ctx.edits > 0 && !ctx.lastErrors.length;
     if (changed) { s.stack += 1; await store.putDraft(s.id, s.stack, ctx.src); }
     s.turns.push({ at: new Date().toISOString(), instruction: text, summary: answer, changed, stack: s.stack });
