@@ -13,7 +13,7 @@ const fromS = s => ({ id: s.id, author: s.author, base_version: s.baseVersion, s
 function supabaseStore() {
   async function q(p, { method = 'GET', body, prefer } = {}) {
     const r = await fetch(`${SB_URL}/rest/v1/${p}`, { method, body: body && JSON.stringify(body),
-      headers: { apikey: SB_KEY, AContent-Type': 'application/json', ...(prefer ? { Prefer: prefer } : {}) } });
+      headers: { apikey: SB_KEY, 'Content-Type': 'application/json', ...(prefer ? { Prefer: prefer } : {}) } });
     if (!r.ok) { const t = await r.text(); const e = new Error(`Supabase ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; throw e; }
     const t = await r.text(); return t ? JSON.parse(t) : null;
   }
