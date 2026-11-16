@@ -2,8 +2,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
-const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '';
+const clean = v => String(v || '').trim().replace(/^["']+|["']+$/g, '').trim();
+const SB_URL = clean(process.env.SUPABASE_URL).replace(/\/+(rest\/v1)?\/*$/, '');
+const SB_KEY = clean(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY);
 const META = 'id,parent,title,notes,author,created_at,session_id,instructions,added,removed';
 
 const toV = r => r && ({ id: r.id, parent: r.parent, title: r.title, notes: r.notes, author: r.author, createdAt: r.created_at, session: r.session_id, instructions: r.instructions || [], added: r.added, removed: r.removed });
@@ -12,9 +13,11 @@ const fromS = s => ({ id: s.id, author: s.author, base_version: s.baseVersion, s
 
 function supabaseStore() {
   async function q(p, { method = 'GET', body, prefer } = {}) {
-    const r = await fetch(`${SB_URL}/rest/v1/${p}`, { method, body: body && JSON.stringify(body),
-      headers: { apikey: SB_KEY, 'Content-Type': 'application/json', ...(prefer ? { Prefer: prefer } : {}) } });
-    if (!r.ok) { const t = await r.text(); const e = new Error(`Supabase ${r.status}: ${t.slice(0, 300)}`); e.status = r.status; throw e; }
+    let r;
+    try { r = await fetch(`${SB_URL}/rest/v1/${p}`, { method, body: body && JSON.stringify(body),
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', ...(prefer ? { Prefer: prefer } : {}) } }); }
+    catch (e) { throw new Error(`no se puede conectar con ${SB_URL || '(SUPABASE_URL vacía)'}: ${e.cause?.code || e.cause?.message || e.message}. Revisa que SUPABASE_URL sea exactamente https://<ref>.supabase.co`); }
+    if (!r.ok) { const t = await r.text(); const e = new Error(`Supabase ${r.status}${r.status === 401 ? ' (clave SUPABASE_SERVICE_ROLE_KEY incorrecta)' : ''}: ${t.slice(0, 300)}`); e.status = r.status; throw e; }
     const t = await r.text(); return t ? JSON.parse(t) : null;
   }
   return {
