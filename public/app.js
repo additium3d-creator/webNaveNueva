@@ -80,16 +80,17 @@ async function ensureSession() {
   st.sess = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ author: st.author, baseVersion: st.view }) });
   return st.sess;
 }
-async function send(text, image) {
+async function send(text, image, photos = []) {
   text = text.trim(); if (!text || st.busy) return;
   st.lastActivity = Date.now();
   try { await ensureSession(); } catch (e) { if (e.message !== 'auth') add('msg err', esc(e.message)); return; }
-  add('msg user', image ? `<span class="meta">Con puntos señalados y captura de la vista</span>${esc(text)}` : esc(text));
+  const tags = [photos.length ? `${photos.length} foto${photos.length > 1 ? 's' : ''}` : '', image ? 'puntos señalados y captura de la vista' : ''].filter(Boolean).join(' · ');
+  add('msg user', `${tags ? `<span class="meta">Con ${tags}</span>` : ''}${photos.length ? `<div class="shots">${photos.map(p => `<img src="${p}" alt="">`).join('')}</div>` : ''}${esc(text)}`);
   const steps = add('steps', ''); let live = null;
   const step = t => { live?.classList.remove('live'); live = document.createElement('div'); live.className = 'live'; live.textContent = t; steps.appendChild(live); log.scrollTop = log.scrollHeight; };
   st.busy = true; updateState(); step('enviando');
   try {
-    const r = await fetch(`/api/sessions/${st.sess.id}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-access-code': st.code }, body: JSON.stringify({ text, image }) });
+    const r = await fetch(`/api/sessions/${st.sess.id}/message`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-access-code': st.code }, body: JSON.stringify({ text, image, photos }) });
     if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || `Error ${r.status}`); }
     const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
     for (;;) {
@@ -115,13 +116,17 @@ async function send(text, image) {
 }
 $('#composer').addEventListener('submit', e => {
   e.preventDefault(); let t = msg.value.trim(); let image = null;
+  if (!t && !st.points.length && !st.photos.length) return;
   if (st.points.length) {
     if (!t) t = 'Fíjate en los puntos que he señalado.';
     t += '\n\n[Puntos señalados en el visor]\n' + st.points.map(p => `${p.idx}) ${p.zone} · X=${p.X.toFixed(2)} Y=${p.Y.toFixed(2)} Z=${p.Z.toFixed(2)} · superficie: ${p.mat || 'sin material identificado'}${p.face ? ' · ' + p.face : ''}`).join('\n');
     try { image = capture(); } catch {}
     clearPins();
   }
-  msg.value = ''; autosize(); setPick(false); send(t, image);
+  const photos = st.photos.slice(); if (!t && photos.length) t = 'Mira la foto adjunta.';
+  if (!t) return;
+  st.photos = []; renderThumbs();
+  msg.value = ''; autosize(); setPick(false); send(t, image, photos);
 });
 msg.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#composer').requestSubmit(); } });
 function autosize() { msg.style.height = 'auto'; msg.style.height = Math.min(140, msg.scrollHeight) + 'px'; }
@@ -185,7 +190,7 @@ $('#btnHist').onclick = () => { $('#hist').hidden = !$('#hist').hidden; };
 $('#histClose').onclick = () => ($('#hist').hidden = true);
 
 /* ---------- señalar puntos en el visor ---------- */
-st.points = [];
+st.points = []; st.photos = [];
 const ZONES = [['Almacén y taller', 0, 0.3, 13.46, 0.3, 16.9], ['Impresión polvo', 0, 13.67, 35.3, 8.81, 16.9], ['Procesado SLS', 0, 13.67, 17.5, 0.3, 8.71], ['Procesado HP', 0, 17.6, 26.2, 0.3, 8.71],
   ['Sala polivalente', 0, 26.3, 35.29, 0.3, 8.71], ['Baños PB', 0, 35.4, 39.19, 11.83, 16.9], ['Vestíbulo', 0, 35.4, 39.19, 8.71, 11.83], ['Sala de muestras', 0, 39.19, 43.94, 8.43, 16.9], ['Hall / showroom', 0, 35.39, 43.94, 0.3, 8.43],
   ['Resina', 1, 22.01, 26.43, 0.3, 8.71], ['Oficina de trabajadores', 1, 26.53, 35.3, 0.3, 8.71], ['Despacho de dirección', 1, 39.19, 43.94, 8.48, 16.9], ['Baño y vestuario', 1, 34, 39.91, 14.78, 16.9],
@@ -242,6 +247,34 @@ function capture() {
   const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(src, 0, 0, W, H);
   return c.toDataURL('image/jpeg', .82);
 }
+
+/* ---------- fotos de referencia ---------- */
+function shrink(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => { const k = Math.min(1, 1280 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', .85)); };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('No se ha podido leer la imagen.')); };
+    img.src = url;
+  });
+}
+async function addPhotos(files) {
+  for (const f of [...files].filter(f => f.type.startsWith('image/'))) {
+    if (st.photos.length >= 4) { toast('Máximo 4 fotos por mensaje.'); break; }
+    try { st.photos.push(await shrink(f)); } catch (e) { toast(e.message); }
+  }
+  renderThumbs(); msg.focus();
+}
+function renderThumbs() { $('#thumbs').innerHTML = st.photos.map((p, i) => `<span class="thumb"><img src="${p}" alt="Foto ${i + 1}"><button type="button" data-unphoto="${i}" aria-label="Quitar foto ${i + 1}">✕</button></span>`).join(''); }
+$('#thumbs').addEventListener('click', e => { const b = e.target.closest('[data-unphoto]'); if (b) { st.photos.splice(+b.dataset.unphoto, 1); renderThumbs(); } });
+$('#btnAttach').onclick = () => $('#fileIn').click();
+$('#fileIn').onchange = e => { addPhotos(e.target.files); e.target.value = ''; };
+msg.addEventListener('paste', e => { const fs = [...(e.clipboardData?.files || [])]; if (fs.length) { e.preventDefault(); addPhotos(fs); } });
+const dock = $('#dock');
+['dragenter', 'dragover'].forEach(ev => dock.addEventListener(ev, e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); dock.classList.add('drop'); } }));
+['dragleave', 'drop'].forEach(ev => dock.addEventListener(ev, () => dock.classList.remove('drop')));
+dock.addEventListener('drop', e => { if (e.dataTransfer?.files?.length) { e.preventDefault(); addPhotos(e.dataTransfer.files); } });
 
 /* ---------- modales: acceso y nombre ---------- */
 function modal(html, wide) { $('#modalBody').innerHTML = html; $('#modal .sheet').classList.toggle('wide', !!wide); $('#modal').hidden = false; $('#modal').querySelectorAll('[data-close]').forEach(b => b.onclick = closeModal); $('#modal').querySelector('input,textarea')?.focus(); }

@@ -65,5 +65,12 @@ Exterior: grass, asphalt, pave, sidewalk, tactile, soil, composite.
 # Puntos señalados por el usuario
 El usuario puede marcar puntos en el visor con el puntero. Te llegan al final del mensaje como «[Puntos señalados en el visor]», con número, zona, planta, coordenadas de edificio (X, Y, Z), material de la superficie tocada (clave de MAT) y hacia dónde mira esa cara. Normalmente va también una captura de su vista con los números dibujados. «Aquí», «esto» o «el punto 2» se refieren a esas marcas. Úsalas para localizar el objeto en el código (busca por coordenadas cercanas o por el material) y para colocar cosas nuevas. Una superficie con cara superior es un suelo o un tablero; una cara lateral es una pared o un frente.
 
+# Fotos de referencia
+El usuario puede adjuntar fotos («pon aquí la máquina de la foto»). Cuando las haya:
+1. Describe en una línea qué identificas (tipo de máquina o mueble, marca o modelo si es evidente, proporciones). Estima sus medidas reales: si reconoces el modelo, usa sus dimensiones conocidas; si no, deduce la escala por elementos de referencia (personas ≈ 1,75 m, puertas 2,10 m, mesas 0,75 m) y dilo.
+2. Modélalo con un nivel de detalle parecido al de HQ.mjf o HQ.fuse: búscalos con «buscar» («function mjf(x,y)», «function fuse(x,y,f)») y usa su estilo. Crea un THREE.Group colocado con G.position.copy(V(x,y,z)), con piezas de cajas de aristas redondeadas (THREE.ExtrudeGeometry con bevel), cilindros, pantallas emisivas, rejillas, juntas, tiradores, patas y una sombra de contacto. Materiales con el color y el acabado de la foto (MeshPhysicalMaterial con clearcoat para plásticos brillantes; metalness para el aluminio). No pongas logotipos ni marcas.
+3. Define la función nueva en la sección de equipamiento, llámala en el punto indicado y añade su colisión con COL.push([x0,x1,y0,y1,z0,z1]).
+4. Si la foto es de un ambiente o un acabado (suelo, pared, mueble), aplícalo con los materiales existentes o con uno nuevo añadido a MAT.
+
 # Rendimiento
 Prefiere box()/ob() (geometría fusionada) a mallas sueltas. No añadas luces con sombra. Evita más de ~10 PointLight nuevas.`;

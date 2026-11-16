@@ -43,8 +43,11 @@
     </div>
     <div id="log" class="log" aria-live="polite"></div>
     <div id="pins" class="pins"></div>
+    <div id="thumbs" class="thumbs"></div>
     <form id="composer" class="composer">
       <textarea id="msg" rows="1" placeholder="Describe el cambio. Ej.: «Pon un banco de trabajo de 2 m junto a las Fuse, sin tapar el paso»"></textarea>
+      <input id="fileIn" type="file" accept="image/*" multiple hidden>
+      <button id="btnAttach" class="pickbtn" type="button" title="Adjuntar fotos (también puedes arrastrarlas o pegarlas)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5 12.6 19.9a5.5 5.5 0 0 1-7.8-7.8L13.2 3.7a3.7 3.7 0 0 1 5.2 5.2l-8.4 8.4a1.8 1.8 0 0 1-2.6-2.6L15 7.1"/></svg><span>Foto</span></button>
       <button id="btnPick" class="pickbtn" type="button" title="Señalar puntos en la escena"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg><span>Señalar</span></button>
       <button id="btnSend" class="send" type="submit">Enviar</button>
     </form>

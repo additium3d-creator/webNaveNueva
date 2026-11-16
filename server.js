@@ -108,7 +108,7 @@ const toolLabel = (n, i) => ({
   reemplazar: 'editando la escena', insertar: `insertando tras la línea ${i.despues_de_linea}`, comprobar: 'comprobando la sintaxis'
 }[n] || n);
 
-async function runAgent(sess, instruction, send, image) {
+async function runAgent(sess, instruction, send, image, photos = []) {
   const ctx = { src: await currentDraft(sess), edits: 0, checked: false, lastErrors: [] };
   if (MOCK) {
     send({ type: 'tool', text: 'modo demostración: sin clave de API' });
@@ -120,7 +120,11 @@ async function runAgent(sess, instruction, send, image) {
     return { text: `Modo demostración (no hay ANTHROPIC_API_KEY): he añadido un bloque rojo en el hall para probar el flujo de versiones.${errs.length ? ' Error: ' + errs[0] : ''}`, ctx };
   }
   const history = sess.history.slice(-8).flatMap(h => [{ role: 'user', content: h.user }, { role: 'assistant', content: h.assistant }]);
-  const first = image ? [{ type: 'image', source: { type: 'base64', media_type: image.slice(5, image.indexOf(';')), data: image.slice(image.indexOf(',') + 1) } }, { type: 'text', text: instruction }] : instruction;
+  const block = d => ({ type: 'image', source: { type: 'base64', media_type: d.slice(5, d.indexOf(';')), data: d.slice(d.indexOf(',') + 1) } });
+  const parts = [];
+  photos.forEach((p, i) => parts.push({ type: 'text', text: `Foto de referencia ${i + 1} adjuntada por el usuario:` }, block(p)));
+  if (image) parts.push({ type: 'text', text: 'Captura de la vista actual del usuario en el visor (los círculos numerados son sus puntos señalados):' }, block(image));
+  const first = parts.length ? [...parts, { type: 'text', text: instruction }] : instruction;
   const messages = [...history, { role: 'user', content: first }];
   let finalText = '', fixes = 0;
   for (let step = 0; step < MAX_STEPS; step++) {
@@ -157,7 +161,7 @@ async function runAgent(sess, instruction, send, image) {
 
 /* ---------------- servidor ---------------- */
 const app = express();
-app.use(express.json({ limit: '8mb' }));
+app.use(express.json({ limit: '25mb' }));
 const cookieCode = req => decodeURIComponent((req.headers.cookie || '').split(/;\s*/).find(c => c.startsWith('nave_ac='))?.slice(8) || '');
 const authed = req => !ACCESS_CODE || req.get('x-access-code') === ACCESS_CODE || cookieCode(req) === ACCESS_CODE;
 const guard = (req, res, next) => (authed(req) ? next() : res.status(401).json({ error: 'Código de acceso incorrecto.' }));
@@ -200,6 +204,8 @@ const busy = new Set();
 app.post('/api/sessions/:sid/message', guard, rate, async (req, res) => {
   let s; try { s = await loadSession(req.params.sid); } catch (e) { return res.status(500).json({ error: e.message }); }
   const text = String(req.body?.text || '').trim().slice(0, 6000);
+  const isImg = x => typeof x === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(x) && x.length < 6e6;
+  const photos = (Array.isArray(req.body?.photos) ? req.body.photos : []).filter(isImg).slice(0, 4);
   const img = typeof req.body?.image === 'string' && /^data:image\/(jpeg|png);base64,/.test(req.body.image) && req.body.image.length < 6e6 ? req.body.image : null;
   if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
   if (!text) return res.status(400).json({ error: 'Mensaje vacío.' });
@@ -210,11 +216,11 @@ app.post('/api/sessions/:sid/message', guard, rate, async (req, res) => {
   const ping = setInterval(() => res.write(': ping\n\n'), 15000);
   try {
     send({ type: 'tool', text: MOCK ? 'preparando' : `pensando con ${MODEL}` });
-    const { text: answer, ctx } = await runAgent(s, text, send, img);
+    const { text: answer, ctx } = await runAgent(s, text, send, img, photos);
     const changed = ctx.edits > 0 && !ctx.lastErrors.length;
     if (changed) { s.stack += 1; await store.putDraft(s.id, s.stack, ctx.src); }
-    s.turns.push({ at: new Date().toISOString(), instruction: text, summary: answer, changed, stack: s.stack });
-    s.history.push({ user: text, assistant: answer + (changed ? '' : '\n(No se ha aplicado ningún cambio en este turno.)') });
+    s.turns.push({ at: new Date().toISOString(), instruction: text, photos: photos.length, summary: answer, changed, stack: s.stack });
+    s.history.push({ user: text + (photos.length ? `\n(Adjuntó ${photos.length} foto${photos.length > 1 ? 's' : ''} de referencia en este mensaje.)` : ''), assistant: answer + (changed ? '' : '\n(No se ha aplicado ningún cambio en este turno.)') });
     await store.saveSession(s);
     send({ type: 'assistant', text: answer, changed, errors: ctx.lastErrors, pending: s.turns.filter(t => t.changed && !t.undone).length });
   } catch (e) {
