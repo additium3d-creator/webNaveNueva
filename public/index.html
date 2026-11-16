@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Nave Da Vinci 16 · Additium3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/assets/logo.png">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <img class="logo" src="/assets/logo.png" alt="Additium3D">
+    <div class="proj">
+      <span class="eyebrow">Nave · Leonardo Da Vinci 16 · Paterna</span>
+      <b id="viewing">Cargando…</b>
+    </div>
+    <nav class="topnav">
+      <button id="btnHist" class="ghost">Historial <span id="vcount" class="count"></span></button>
+      <button id="btnWho" class="who" title="Cambiar nombre"><i></i><span id="who">—</span></button>
+    </nav>
+  </header>
+
+  <main class="stage">
+    <iframe id="viewer" title="Visor 3D de la nave" allow="fullscreen"></iframe>
+    <div id="sceneErr" class="scene-err" hidden></div>
+    <div id="loading" class="loading"><span></span>Cargando escena</div>
+  </main>
+
+  <section id="dock" class="dock">
+    <div class="dock-head">
+      <div class="state"><i id="dot" class="dot"></i><span id="state">Viendo la última versión</span></div>
+      <div class="actions">
+        <button id="btnUndo" class="ghost" disabled>Deshacer</button>
+        <button id="btnDiscard" class="ghost" disabled>Descartar</button>
+        <button id="btnSave" class="primary" disabled>Guardar versión</button>
+        <button id="btnFold" class="icon" aria-label="Plegar panel" title="Plegar panel">▾</button>
+      </div>
+    </div>
+    <div id="log" class="log" aria-live="polite"></div>
+    <form id="composer" class="composer">
+      <textarea id="msg" rows="1" placeholder="Describe el cambio. Ej.: «Pon un banco de trabajo de 2 m junto a las Fuse, sin tapar el paso»"></textarea>
+      <button id="btnSend" class="send" type="submit">Enviar</button>
+    </form>
+  </section>
+</div>
+
+<aside id="hist" class="drawer" hidden>
+  <div class="drawer-head"><div><span class="eyebrow">Trazabilidad</span><h2>Historial de versiones</h2></div><button id="histClose" class="icon" aria-label="Cerrar">✕</button></div>
+  <ol id="vlist" class="vlist"></ol>
+</aside>
+
+<div id="modal" class="modal" hidden><div class="sheet" role="dialog" aria-modal="true"><div id="modalBody"></div></div></div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
