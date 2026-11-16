@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { createTwoFilesPatch } from 'diff';
 import { SYSTEM_GUIDE } from './agent-guide.js';
+import { makeStore } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -18,32 +19,19 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 const ACCESS_CODE = process.env.ACCESS_CODE || '';
 const MOCK = !process.env.ANTHROPIC_API_KEY || process.env.MOCK_AGENT === '1';
 const MAX_STEPS = +(process.env.AGENT_MAX_STEPS || 30);
-const VDIR = path.join(DATA, 'versions');
-const SDIR = path.join(DATA, 'sessions');
-fs.mkdirSync(VDIR, { recursive: true });
-fs.mkdirSync(SDIR, { recursive: true });
 const anthropic = MOCK ? null : new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-/* ---------------- almacenamiento ---------------- */
-const INDEX = path.join(VDIR, 'index.json');
-const readJSON = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
-const writeJSON = (f, o) => { const t = f + '.tmp'; fs.writeFileSync(t, JSON.stringify(o, null, 2)); fs.renameSync(t, f); };
+const store = makeStore(DATA);
 let lock = Promise.resolve();
 const serial = fn => (lock = lock.then(fn, fn));
-
-function versions() { return readJSON(INDEX, []); }
-function versionFile(id) { return path.join(VDIR, `v${id}.html`); }
-if (!versions().length) {
-  fs.copyFileSync(path.join(__dirname, 'scene', 'base.html'), versionFile(1));
-  writeJSON(INDEX, [{ id: 1, parent: null, title: 'Versión inicial', notes: 'Modelo construido a partir de los planos E-481 y el boceto de distribución.', author: 'Additium3D', createdAt: new Date().toISOString(), instructions: [], added: 0, removed: 0 }]);
-}
-
 const sidOk = s => /^[a-z0-9]{10,40}$/.test(s);
-const sessFile = sid => path.join(SDIR, sid, 'session.json');
-const draftFile = (sid, k) => path.join(SDIR, sid, `draft-${k}.html`);
-function loadSession(sid) { if (!sidOk(sid)) return null; return readJSON(sessFile(sid), null); }
-function saveSession(s) { s.updatedAt = new Date().toISOString(); writeJSON(sessFile(s.id), s); }
-function currentDraft(s) { return fs.readFileSync(draftFile(s.id, s.stack), 'utf8'); }
+async function loadSession(sid) { return sidOk(sid) ? store.getSession(sid) : null; }
+async function currentDraft(s) { return store.getDraft(s.id, s.stack); }
+async function seed() {
+  if ((await store.listVersions()).length) return;
+  await store.addVersion({ id: 1, parent: null, title: 'Versión inicial', notes: 'Modelo construido a partir de los planos E-481 y el boceto de distribución.', author: 'Additium3D', instructions: [] },
+    fs.readFileSync(path.join(__dirname, 'scene', 'base.html'), 'utf8'));
+  console.log('Sembrada la versión inicial v1.');
+}
 
 /* ---------------- comprobación de sintaxis ---------------- */
 async function checkSyntax(html) {
@@ -121,7 +109,7 @@ const toolLabel = (n, i) => ({
 }[n] || n);
 
 async function runAgent(sess, instruction, send) {
-  const ctx = { src: currentDraft(sess), edits: 0, checked: false, lastErrors: [] };
+  const ctx = { src: await currentDraft(sess), edits: 0, checked: false, lastErrors: [] };
   if (MOCK) {
     send({ type: 'tool', text: 'modo demostración: sin clave de API' });
     const tag = `/* ---- cambio de demostración ${sess.turns.length + 1} ---- */`;
@@ -175,36 +163,41 @@ const guard = (req, res, next) => (authed(req) ? next() : res.status(401).json({
 const hits = new Map();
 const rate = (req, res, next) => { const k = req.ip, now = Date.now(), h = (hits.get(k) || []).filter(t => now - t < 3600e3); if (h.length >= 60) return res.status(429).json({ error: 'Demasiadas peticiones en la última hora.' }); h.push(now); hits.set(k, h); next(); };
 
-app.get('/api/config', (req, res) => res.json({ model: MODEL, mock: MOCK, requiresCode: !!ACCESS_CODE, authed: authed(req), latest: versions().at(-1)?.id }));
+const wrap = fn => (req, res) => Promise.resolve(fn(req, res)).catch(e => { console.error(e); if (!res.headersSent) res.status(500).json({ error: e.message }); });
+app.get('/api/config', wrap(async (req, res) => res.json({ model: MODEL, mock: MOCK, storage: store.kind, requiresCode: !!ACCESS_CODE, authed: authed(req), latest: (await store.listVersions()).at(-1)?.id })));
 app.post('/api/login', (req, res) => {
   if (ACCESS_CODE && req.body?.code !== ACCESS_CODE) return res.status(401).json({ error: 'Código de acceso incorrecto.' });
   res.setHeader('Set-Cookie', `nave_ac=${encodeURIComponent(req.body?.code || '')}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
   res.json({ ok: true });
 });
-app.get('/api/versions', guard, (_q, res) => res.json(versions()));
-app.get('/api/versions/:id/diff', guard, (req, res) => {
-  const v = versions().find(x => x.id === +req.params.id); if (!v) return res.status(404).json({ error: 'No existe.' });
+app.get('/api/versions', guard, wrap(async (_q, res) => res.json(await store.listVersions())));
+app.get('/api/versions/:id/diff', guard, wrap(async (req, res) => {
+  const v = (await store.listVersions()).find(x => x.id === +req.params.id); if (!v) return res.status(404).json({ error: 'No existe.' });
   const cut = t => t.split('\n').map(l => (l.length > 300 ? l.slice(0, 300) + '…' : l)).join('\n');
-  const a = v.parent ? cut(fs.readFileSync(versionFile(v.parent), 'utf8')) : '', b = cut(fs.readFileSync(versionFile(v.id), 'utf8'));
+  const a = v.parent ? cut(await store.getScene(v.parent)) : '', b = cut(await store.getScene(v.id));
   res.type('text/plain').send(createTwoFilesPatch(v.parent ? `v${v.parent}` : 'vacío', `v${v.id}`, a, b, '', '', { context: 2 }));
-});
-app.get('/scene/v/:id', guard, (req, res) => { const f = versionFile(+req.params.id | 0); if (!fs.existsSync(f)) return res.status(404).send('No existe'); res.type('html').set('Cache-Control', 'no-store').send(fs.readFileSync(f)); });
-app.get('/scene/s/:sid', guard, (req, res) => { const s = loadSession(req.params.sid); if (!s) return res.status(404).send('No existe'); res.type('html').set('Cache-Control', 'no-store').send(currentDraft(s)); });
+}));
+app.get('/api/changelog', guard, wrap(async (_q, res) => {
+  const md = (await store.listVersions()).reverse().map(v => `## v${v.id} · ${v.title}\n${v.createdAt} · ${v.author}${v.parent ? ` · basada en v${v.parent}` : ''}\n${v.notes ? v.notes + '\n' : ''}${v.instructions.map(i => `- ${i.instruction}`).join('\n')}`).join('\n\n');
+  res.type('text/markdown').send(`# Historial · Nave Da Vinci 16\n\n${md}\n`);
+}));
+app.get('/scene/v/:id', guard, wrap(async (req, res) => { const t = await store.getScene(+req.params.id | 0); if (t == null) return res.status(404).send('No existe'); res.type('html').set('Cache-Control', 'no-store').send(t); }));
+app.get('/scene/s/:sid', guard, wrap(async (req, res) => { const s = await loadSession(req.params.sid); if (!s) return res.status(404).send('No existe'); res.type('html').set('Cache-Control', 'no-store').send(await currentDraft(s)); }));
 
-app.post('/api/sessions', guard, (req, res) => {
-  const base = +req.body?.baseVersion || versions().at(-1).id;
-  if (!fs.existsSync(versionFile(base))) return res.status(400).json({ error: 'Versión base inexistente.' });
+app.post('/api/sessions', guard, wrap(async (req, res) => {
+  const list = await store.listVersions();
+  const base = +req.body?.baseVersion || list.at(-1).id;
+  const scene = await store.getScene(base); if (scene == null) return res.status(400).json({ error: 'Versión base inexistente.' });
   const id = crypto.randomBytes(9).toString('hex');
-  fs.mkdirSync(path.join(SDIR, id), { recursive: true });
-  fs.copyFileSync(versionFile(base), draftFile(id, 0));
   const s = { id, author: String(req.body?.author || 'Anónimo').slice(0, 60), baseVersion: base, createdAt: new Date().toISOString(), stack: 0, turns: [], history: [], status: 'open' };
-  saveSession(s); res.json(s);
-});
-app.get('/api/sessions/:sid', guard, (req, res) => { const s = loadSession(req.params.sid); s ? res.json(s) : res.status(404).json({ error: 'No existe.' }); });
+  await store.saveSession(s); await store.putDraft(id, 0, scene); res.json(s);
+}));
+app.get('/api/sessions/:sid', guard, wrap(async (req, res) => { const s = await loadSession(req.params.sid); s ? res.json(s) : res.status(404).json({ error: 'No existe.' }); }));
 
 const busy = new Set();
 app.post('/api/sessions/:sid/message', guard, rate, async (req, res) => {
-  const s = loadSession(req.params.sid); const text = String(req.body?.text || '').trim().slice(0, 4000);
+  let s; try { s = await loadSession(req.params.sid); } catch (e) { return res.status(500).json({ error: e.message }); }
+  const text = String(req.body?.text || '').trim().slice(0, 4000);
   if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
   if (!text) return res.status(400).json({ error: 'Mensaje vacío.' });
   if (busy.has(s.id)) return res.status(409).json({ error: 'Esta sesión ya está procesando un cambio.' });
@@ -216,44 +209,47 @@ app.post('/api/sessions/:sid/message', guard, rate, async (req, res) => {
     send({ type: 'tool', text: MOCK ? 'preparando' : `pensando con ${MODEL}` });
     const { text: answer, ctx } = await runAgent(s, text, send);
     const changed = ctx.edits > 0 && !ctx.lastErrors.length;
-    if (changed) { s.stack += 1; fs.writeFileSync(draftFile(s.id, s.stack), ctx.src); }
+    if (changed) { s.stack += 1; await store.putDraft(s.id, s.stack, ctx.src); }
     s.turns.push({ at: new Date().toISOString(), instruction: text, summary: answer, changed, stack: s.stack });
     s.history.push({ user: text, assistant: answer + (changed ? '' : '\n(No se ha aplicado ningún cambio en este turno.)') });
-    saveSession(s);
-    send({ type: 'assistant', text: answer, changed, errors: ctx.lastErrors, pending: s.turns.filter(t => t.changed).length });
+    await store.saveSession(s);
+    send({ type: 'assistant', text: answer, changed, errors: ctx.lastErrors, pending: s.turns.filter(t => t.changed && !t.undone).length });
   } catch (e) {
     console.error(e); send({ type: 'error', text: e?.error?.error?.message || e.message || 'Error del agente.' });
   } finally { clearInterval(ping); busy.delete(s.id); send({ type: 'done' }); res.end(); }
 });
-app.post('/api/sessions/:sid/undo', guard, (req, res) => {
-  const s = loadSession(req.params.sid); if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
+app.post('/api/sessions/:sid/undo', guard, wrap(async (req, res) => {
+  const s = await loadSession(req.params.sid); if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
   if (s.stack === 0) return res.status(400).json({ error: 'No hay cambios que deshacer.' });
-  fs.rmSync(draftFile(s.id, s.stack), { force: true }); s.stack -= 1;
+  await store.delDraft(s.id, s.stack); s.stack -= 1;
   const t = [...s.turns].reverse().find(t => t.changed && !t.undone); if (t) t.undone = true;
   s.history.push({ user: '(deshacer)', assistant: 'Se ha deshecho el último cambio aplicado.' });
-  saveSession(s); res.json(s);
-});
-app.post('/api/sessions/:sid/discard', guard, (req, res) => {
-  const s = loadSession(req.params.sid); if (!s) return res.status(404).json({ error: 'No existe.' });
-  s.status = 'discarded'; saveSession(s); res.json({ ok: true });
-});
-app.post('/api/sessions/:sid/save', guard, (req, res) => serial(async () => {
-  const s = loadSession(req.params.sid); if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
+  await store.saveSession(s); res.json(s);
+}));
+app.post('/api/sessions/:sid/discard', guard, wrap(async (req, res) => {
+  const s = await loadSession(req.params.sid); if (!s) return res.status(404).json({ error: 'No existe.' });
+  s.status = 'discarded'; await store.saveSession(s); res.json({ ok: true });
+}));
+app.post('/api/sessions/:sid/save', guard, wrap((req, res) => serial(async () => {
+  const s = await loadSession(req.params.sid); if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
   const applied = s.turns.filter(t => t.changed && !t.undone);
   if (!applied.length || s.stack === 0) return res.status(400).json({ error: 'No hay cambios que guardar.' });
-  const list = versions(), id = Math.max(...list.map(v => v.id)) + 1, src = currentDraft(s);
-  const base = fs.readFileSync(versionFile(s.baseVersion), 'utf8').split('\n'), now = src.split('\n');
-  const setB = new Set(base), setN = new Set(now);
-  fs.writeFileSync(versionFile(id), src);
-  const v = { id, parent: s.baseVersion, title: String(req.body?.title || applied[0].instruction).slice(0, 120), notes: String(req.body?.notes || '').slice(0, 4000),
-    author: s.author, createdAt: new Date().toISOString(), session: s.id,
-    instructions: applied.map(t => ({ instruction: t.instruction, summary: t.summary.slice(0, 1500), at: t.at })),
+  const src = await currentDraft(s), baseSrc = await store.getScene(s.baseVersion);
+  const base = baseSrc.split('\n'), now = src.split('\n'), setB = new Set(base), setN = new Set(now);
+  const meta = { parent: s.baseVersion, title: String(req.body?.title || applied[0].instruction).slice(0, 120), notes: String(req.body?.notes || '').slice(0, 4000),
+    author: s.author, session: s.id, instructions: applied.map(t => ({ instruction: t.instruction, summary: t.summary.slice(0, 1500), at: t.at })),
     added: now.filter(l => !setB.has(l)).length, removed: base.filter(l => !setN.has(l)).length };
-  list.push(v); writeJSON(INDEX, list);
-  fs.appendFileSync(path.join(VDIR, 'CHANGELOG.md'), `\n## v${id} · ${v.title}\n${v.createdAt} · ${v.author} · basada en v${v.parent}\n${v.notes ? v.notes + '\n' : ''}${v.instructions.map(i => `- ${i.instruction}`).join('\n')}\n`);
-  s.status = 'saved'; s.savedAs = id; saveSession(s);
+  let v;
+  for (let tries = 0; tries < 3; tries++) {
+    const id = Math.max(0, ...(await store.listVersions()).map(x => x.id)) + 1;
+    try { await store.addVersion({ id, ...meta }, src); v = { id, ...meta, createdAt: new Date().toISOString() }; break; }
+    catch (e) { if (e.status !== 409) throw e; }
+  }
+  if (!v) return res.status(409).json({ error: 'No se pudo numerar la versión; vuelve a intentarlo.' });
+  s.status = 'saved'; s.savedAs = v.id; await store.saveSession(s);
   res.json(v);
-}));
+})));
 
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
-app.listen(PORT, () => console.log(`Nave Da Vinci 16 en :${PORT} · modelo ${MOCK ? 'DEMO (sin API)' : MODEL} · datos en ${DATA}`));
+seed().then(() => app.listen(PORT, () => console.log(`Nave Da Vinci 16 en :${PORT} · modelo ${MOCK ? 'DEMO (sin API)' : MODEL} · almacenamiento ${store.kind}`)))
+  .catch(e => { console.error('No se pudo iniciar el almacenamiento:', e.message); process.exit(1); });

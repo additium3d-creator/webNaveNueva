@@ -2,20 +2,18 @@ services:
   - type: web
     name: nave-davinci16
     runtime: node
-    plan: starter            # el disco persistente necesita un plan de pago
+    plan: free                 # las versiones viven en Supabase: no hace falta disco
     buildCommand: npm install
     startCommand: node server.js
     healthCheckPath: /api/config
     envVars:
       - key: ANTHROPIC_API_KEY
-        sync: false          # se rellena en el panel de Render
+        sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-5-5
       - key: ACCESS_CODE
-        sync: false          # código que compartes con quien quieras que pruebe
-      - key: DATA_DIR
-        value: /var/data
-    disk:
-      name: nave-data
-      mountPath: /var/data
-      sizeGB: 1
+        sync: false
+      - key: SUPABASE_URL
+        value: https://bxndeeoxvkqikmfcmook.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

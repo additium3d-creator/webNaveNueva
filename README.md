@@ -16,22 +16,33 @@ Web de Additium3D para recorrer en 3D la nueva sede (Calle Leonardo Da Vinci 16,
   - Con «Editar desde aquí» puedes partir de cualquier versión antigua: se crea una rama y la trazabilidad queda reflejada.
 - **Errores:** si el visor falla al cargar un borrador, se pide el arreglo al asistente automáticamente, una sola vez.
 
-Los datos se guardan en `DATA_DIR`:
-- `versions/vN.html`: una escena completa por versión.
-- `versions/index.json`: los metadatos.
-- `versions/CHANGELOG.md`: un registro legible de los cambios.
-- `sessions/`: los borradores y el historial de cada sesión.
+## Dónde se guardan los datos
+En **Supabase**, en el proyecto `additium-panel`, con tres tablas propias:
+- `nave_versions`: cada versión con su escena completa, título, notas, autor, versión de partida e instrucciones.
+- `nave_sessions`: sesiones de cambios abiertas, guardadas o descartadas.
+- `nave_drafts`: los borradores de cada paso de una sesión, que permiten deshacer y recuperar la sesión.
 
-## Despliegue en Render
+Las tablas tienen RLS activado y ninguna política pública. Solo el servidor accede, con la clave secreta. El historial legible está en `/api/changelog`.
+
+Sin `SUPABASE_URL`, el servidor guarda en una carpeta local (`DATA_DIR`). Úsalo solo para desarrollo.
+
+## Despliegue en Render (gratis)
 1. Sube esta carpeta a un repositorio de GitHub.
-2. En Render, ve a **New → Blueprint** y elige el repositorio. Render lee `render.yaml`: crea un servicio web con Node y un **disco persistente de 1 GB** en `/var/data`.
-   - El disco solo está disponible en planes de pago (Starter o superior).
-   - Sin disco, las versiones se pierden en cada redeploy.
-3. Rellena las variables:
+2. En Render, crea un **New Web Service**, conéctalo al repositorio y rellena:
+   - **Runtime:** Node.
+   - **Build:** `npm install`
+   - **Start:** `node server.js`
+   - **Instance Type:** **Free**
+3. En **Environment Variables**:
    - `ANTHROPIC_API_KEY`: tu clave de la API de Anthropic.
-   - `ANTHROPIC_MODEL`: identificador del modelo. Viene puesto `claude-sonnet-5-5`; comprueba el identificador exacto en la documentación de modelos de Anthropic y cámbialo aquí si hace falta.
-   - `ACCESS_CODE`: el código que compartes con quien vaya a probar. Sin código, cualquiera con el enlace puede gastar tu API.
-4. Abre la URL de Render, escribe tu nombre y el código.
+   - `ANTHROPIC_MODEL`: viene puesto `claude-sonnet-5-5`; comprueba el identificador exacto en la documentación de modelos de Anthropic y cámbialo si hace falta.
+   - `ACCESS_CODE`: el código que compartes con quien vaya a probar.
+   - `SUPABASE_URL`: `https://bxndeeoxvkqikmfcmook.supabase.co`
+   - `SUPABASE_SERVICE_ROLE_KEY`: en Supabase, ve a Project Settings → API Keys y copia la clave **secret** (o la `service_role` en las claves antiguas). No la publiques nunca.
+4. En Advanced, pon **Health Check Path** = `/api/config`, y despliega.
+5. La primera vez, el servidor crea la v1 en Supabase con la nave actual.
+
+En el plan Free, el servicio se duerme tras 15 minutos sin uso y la primera visita tarda alrededor de un minuto. No se pierde nada, porque todo está en Supabase.
 
 ## En local
 ```bash
