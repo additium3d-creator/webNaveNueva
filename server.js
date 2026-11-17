@@ -16,6 +16,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
 const DATA = process.env.DATA_DIR || path.join(__dirname, 'data');
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
+const BUILD = { version: JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8')).version, commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7), started: new Date().toISOString() };
 const ACCESS_CODE = process.env.ACCESS_CODE || '';
 const ADMIN_CODE = process.env.ADMIN_CODE || '';
 const MOCK = !process.env.ANTHROPIC_API_KEY || process.env.MOCK_AGENT === '1';
@@ -177,7 +178,7 @@ const rate = (req, res, next) => { const k = req.ip, now = Date.now(), h = (hits
 
 const expose = html => html.replace('window.__nave={stats,', 'window.__nave={stats,scene,camera,renderer,MAT,THREE,');
 const wrap = fn => (req, res) => Promise.resolve(fn(req, res)).catch(e => { console.error(e); if (!res.headersSent) res.status(500).json({ error: e.message }); });
-app.get('/api/config', wrap(async (req, res) => res.json({ model: MODEL, mock: MOCK, storage: store.kind, requiresCode: !!(ACCESS_CODE || ADMIN_CODE), authed: authed(req), admin: isAdmin(req), latest: (await store.listVersions()).at(-1)?.id })));
+app.get('/api/config', wrap(async (req, res) => res.json({ model: MODEL, mock: MOCK, storage: store.kind, requiresCode: !!(ACCESS_CODE || ADMIN_CODE), authed: authed(req), admin: isAdmin(req), adminConfigured: !!ADMIN_CODE, build: BUILD, latest: (await store.listVersions()).at(-1)?.id })));
 app.post('/api/login', (req, res) => {
   const c = req.body?.code; if ((ACCESS_CODE || ADMIN_CODE) && c !== ACCESS_CODE && !(ADMIN_CODE && c === ADMIN_CODE)) return res.status(401).json({ error: 'Código de acceso incorrecto.' });
   res.setHeader('Set-Cookie', `nave_ac=${encodeURIComponent(req.body?.code || '')}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
@@ -272,8 +273,11 @@ app.post('/api/sessions/:sid/save', guard, wrap((req, res) => serial(async () =>
 /* ---------- administración: todas las pruebas del equipo ---------- */
 app.get('/api/admin/sessions', adminGuard, wrap(async (_q, res) => {
   const list = await store.listSessions();
+  // Numeración global: cada cambio aplicado por cualquiera recibe un número correlativo por orden de llegada (#1, #2, #3…).
+  const all = list.flatMap(s => (s.turns || []).filter(t => t.changed).map(t => ({ s: s.id, k: draftOf(t), at: t.at }))).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const num = new Map(all.map((x, i) => [`${x.s}:${x.k}`, i + 1]));
   res.json(list.map(s => ({ id: s.id, author: s.author, baseVersion: s.baseVersion, status: s.status, savedAs: s.savedAs, stack: s.stack, createdAt: s.createdAt, updatedAt: s.updatedAt,
-    promoted: s.promoted || [], turns: (s.turns || []).map(t => ({ at: t.at, instruction: t.instruction, summary: (t.summary || '').slice(0, 600), changed: t.changed, undone: !!t.undone, photos: t.photos || 0, draft: t.changed ? draftOf(t) : null })) })));
+    promoted: s.promoted || [], turns: (s.turns || []).map(t => ({ at: t.at, instruction: t.instruction, summary: (t.summary || '').slice(0, 600), changed: t.changed, undone: !!t.undone, photos: t.photos || 0, draft: t.changed ? draftOf(t) : null, n: t.changed ? num.get(`${s.id}:${draftOf(t)}`) : null })) })));
 }));
 app.get('/scene/d/:sid/:k', adminGuard, wrap(async (req, res) => {
   if (!sidOk(req.params.sid)) return res.status(404).send('No existe');

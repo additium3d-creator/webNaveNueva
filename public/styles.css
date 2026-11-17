@@ -11,7 +11,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:400 1
 button,textarea,input{font:inherit;color:inherit}
 button{cursor:pointer}
 button:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.app{height:100%;display:grid;grid-template-rows:auto 1fr auto;padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+.app{height:100%;display:grid;grid-template-rows:auto 1fr auto auto;padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
 .eyebrow{font:500 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
 
 /* cabecera */
@@ -149,7 +149,7 @@ button:disabled{opacity:.38;cursor:not-allowed}
 .badge{font:500 11px var(--mono);padding:2px 7px;border-radius:99px;border:1px solid var(--line2);color:var(--muted);white-space:nowrap}
 .badge.open{color:#ffc857;border-color:#ffc85766}.badge.saved{color:var(--accent);border-color:#1ec29b66}.badge.discarded{color:#ff7a7a;border-color:#ff7a7a55}
 .turns{list-style:none;margin:0;padding:0;display:grid;gap:6px}
-.turns li{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start;font-size:13px;color:#c9d6d2;padding:6px 8px;border-radius:6px;background:#04170f}
+.turns li{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;font-size:13px;color:#c9d6d2;padding:6px 8px;border-radius:6px;background:#04170f}
 .turns li.undone{opacity:.55}.turns li.undone .ti{text-decoration:line-through}
 .turns li.cur{outline:1px solid var(--accent)}
 .turns .ts{font:400 11px var(--mono);color:var(--muted);display:block;margin-top:2px}
@@ -157,3 +157,10 @@ button:disabled{opacity:.38;cursor:not-allowed}
 .peek{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:6;display:flex;gap:10px;align-items:center;background:rgba(3,19,15,.92);border:1px solid var(--accent);border-radius:99px;padding:6px 6px 6px 16px;font-size:13px;max-width:calc(100% - 32px)}
 .peek span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .peek button{padding:4px 12px;font-size:12px}
+.turns .tn{font:600 12px var(--mono);color:var(--accent);min-width:30px;padding-top:1px}
+
+.foot{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:5px max(16px,env(safe-area-inset-left,0px));padding-bottom:calc(5px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line2);background:#000;font:400 11px var(--mono);color:var(--muted);letter-spacing:.03em}
+.foot b{color:var(--accent);font-weight:500}
+.foot button{background:none;border:0;padding:0;font:inherit;color:var(--muted);text-decoration:underline;text-underline-offset:3px}
+.foot button:hover{color:#fff}
+.foot .on{color:var(--accent)}

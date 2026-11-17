@@ -57,7 +57,7 @@ function updateState() {
   $('#btnDiscard').disabled = st.busy || !st.sess;
   $('#btnSend').disabled = st.busy;
   $('#who').textContent = st.author || 'Sin nombre';
-  $('#vcount').textContent = st.versions.length;
+  $('#vcount').textContent = st.versions.length; renderFoot();
   if (st.sess) store.set('nave.sid', st.sess.id); else store.set('nave.sid', null);
 }
 
@@ -197,19 +197,19 @@ function renderSessions() {
   const L = st.adminSessions.filter(s => s.turns.length);
   $('#scount').textContent = L.length;
   $('#slist').innerHTML = L.length ? L.map(s => {
-    const n = s.turns.filter(t => t.changed && !t.undone).length;
+    const n = s.turns.filter(t => t.changed && !t.undone).length, nums = s.turns.map(t => t.n).filter(Boolean), fin = s.turns.find(t => t.draft === s.stack)?.n;
     const badge = s.status === 'saved' ? `guardada como v${s.savedAs}` : STATUS[s.status] || s.status;
-    return `<li class="v"><div class="v-top"><span class="v-title">${esc(s.author)}</span><span class="badge ${s.status}">${esc(badge)}</span></div>
+    return `<li class="v"><div class="v-top">${nums.length ? `<span class="vid">#${nums[0]}${nums.length > 1 ? '–' + nums.at(-1) : ''}</span>` : ''}<span class="v-title">${esc(s.author)}</span><span class="badge ${s.status}">${esc(badge)}</span></div>
     <div class="v-meta">${fmtDate(s.createdAt)} · sobre v${s.baseVersion} · ${s.turns.length} mensaje${s.turns.length > 1 ? 's' : ''} · ${n} cambio${n === 1 ? '' : 's'} vivo${n === 1 ? '' : 's'}${s.promoted.length ? ' · rescatada: ' + s.promoted.map(p => 'v' + p.version).join(', ') : ''}</div>
-    <ol class="turns">${s.turns.map((t, i) => `<li class="${t.undone ? 'undone' : ''}${st.peek?.sid === s.id && st.peek?.k === t.draft ? ' cur' : ''}"><div><span class="ti">${esc(t.instruction.split('\n\n[Puntos')[0])}</span><span class="ts">${fmtDate(t.at)}${t.photos ? ` · ${t.photos} foto${t.photos > 1 ? 's' : ''}` : ''}${t.changed ? (t.undone ? ' · deshecho' : '') : ' · sin cambios'}</span></div>${t.changed ? `<button class="ghost" data-peek="${s.id}" data-k="${t.draft}" data-i="${i + 1}">Ver</button>` : ''}</li>`).join('')}</ol>
-    <div class="v-act">${s.stack ? `<button class="ghost" data-peek="${s.id}" data-k="${s.stack}" data-i="final">Ver resultado final</button>` : ''}${s.stack && s.status !== 'saved' ? `<button class="ghost" data-promote="${s.id}">Guardar como versión</button>` : ''}</div></li>`;
+    <ol class="turns">${s.turns.map((t, i) => `<li class="${t.undone ? 'undone' : ''}${st.peek?.sid === s.id && st.peek?.k === t.draft ? ' cur' : ''}">${t.n ? `<span class="tn">#${t.n}</span>` : '<span class="tn"></span>'}<div><span class="ti">${esc(t.instruction.split('\n\n[Puntos')[0])}</span><span class="ts">${fmtDate(t.at)}${t.photos ? ` · ${t.photos} foto${t.photos > 1 ? 's' : ''}` : ''}${t.changed ? (t.undone ? ' · deshecho' : '') : ' · sin cambios'}</span></div>${t.changed ? `<button class="ghost" data-peek="${s.id}" data-k="${t.draft}" data-n="${t.n}">Ver</button>` : ''}</li>`).join('')}</ol>
+    <div class="v-act">${s.stack ? `<button class="ghost" data-peek="${s.id}" data-k="${s.stack}" data-n="${fin || ''}">Ver resultado final${fin ? ` (#${fin})` : ''}</button>` : ''}${s.stack && s.status !== 'saved' ? `<button class="ghost" data-promote="${s.id}">Guardar como versión</button>` : ''}</div></li>`;
   }).join('') : '<li class="v-meta">Aún nadie ha probado cambios.</li>';
 }
 $('#slist').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   const s = st.adminSessions.find(x => x.id === (b.dataset.peek || b.dataset.promote)); if (!s) return;
   if (b.dataset.peek) {
-    const k = +b.dataset.k, label = `Prueba de ${s.author} · ${b.dataset.i === 'final' ? 'resultado final' : 'tras el paso ' + b.dataset.i}`;
+    const k = +b.dataset.k, label = `Prueba #${b.dataset.n} · ${s.author}`;
     loadViewer(`/scene/d/${s.id}/${k}`, true, { sid: s.id, k, label }); updateState();
   }
   if (b.dataset.promote) {
@@ -349,7 +349,25 @@ function showLogin(err) {
   });
 }
 const askName = () => showLogin();
-function applyAdmin() { const a = !!st.cfg?.admin; $('#tabs').hidden = !a; $('#btnHist').firstChild.textContent = a ? 'Historial y pruebas ' : 'Historial '; if (a) refreshSessions(); else { $('#slist').hidden = true; $('#vlist').hidden = false; } }
+function renderFoot() {
+  const b = st.cfg?.build || {}, latest = st.versions.at(-1)?.id, cur = st.peek ? '' : st.sess ? `borrador sobre v${st.sess.baseVersion}` : st.view ? `viendo v${st.view}` : '';
+  $('#build').innerHTML = `Web <b>v${esc(b.version || '?')}</b>${b.commit ? ` · commit ${esc(b.commit)}` : ''} · última versión de la nave <b>v${latest ?? '—'}</b>${cur ? ` · ${esc(cur)}` : ''}`;
+  $('#adm').innerHTML = st.cfg?.admin ? '<span class="on">● Modo administrador</span>' : '<button id="admLink" type="button">Acceso administrador</button>';
+  $('#admLink')?.addEventListener('click', adminLogin);
+}
+function adminLogin() {
+  if (!st.cfg?.adminConfigured) return modal('<span class="eyebrow">Administrador</span><h2>Falta configurar el código</h2><p>El servidor no tiene la variable <b>ADMIN_CODE</b>. Añádela en Render → Environment y espera a que se reinicie el servicio.</p><div class="row"><button class="ghost" data-close>Cerrar</button></div>');
+  modal('<span class="eyebrow">Administrador</span><h2>Código de administrador</h2><p>Con él verás las pruebas de todo el equipo, paso a paso, y podrás rescatarlas como versión.</p><div class="field"><label for="aCode">Código</label><input id="aCode" type="password" autocomplete="off"></div><p id="aErr" class="hint" hidden></p><div class="row"><button class="ghost" data-close>Cancelar</button><button id="aGo" class="primary">Entrar</button></div>');
+  const go = async () => {
+    const code = $('#aCode').value;
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.admin) { $('#aErr').hidden = false; $('#aErr').textContent = 'Ese no es el código de administrador.'; return; }
+    st.code = code; store.set('nave.code', code); st.cfg.admin = true; closeModal(); applyAdmin(); renderFoot(); $('#hist').hidden = false; $('#tabs [data-tab="s"]').click(); toast('Modo administrador activado');
+  };
+  $('#aGo').onclick = go; $('#aCode').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+}
+function applyAdmin() { const a = !!st.cfg?.admin; $('#tabs').hidden = !a; $('#btnHist').firstChild.textContent = a ? 'Historial y pruebas ' : 'Historial '; if (a) refreshSessions(); else { $('#slist').hidden = true; $('#vlist').hidden = false; } renderFoot(); }
 $('#btnWho').onclick = () => showLogin();
 
 /* ---------- fin de sesión: pedir guardar ---------- */
