@@ -13,6 +13,8 @@ services:
         value: claude-sonnet-5-5
       - key: ACCESS_CODE
         sync: false
+      - key: ADMIN_CODE
+        sync: false
       - key: SUPABASE_URL
         value: https://bxndeeoxvkqikmfcmook.supabase.co
       - key: SUPABASE_SERVICE_ROLE_KEY

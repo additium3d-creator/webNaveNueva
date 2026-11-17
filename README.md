@@ -37,6 +37,7 @@ Sin `SUPABASE_URL`, el servidor guarda en una carpeta local (`DATA_DIR`). Úsalo
    - `ANTHROPIC_API_KEY`: tu clave de la API de Anthropic.
    - `ANTHROPIC_MODEL`: viene puesto `claude-sonnet-5-5`; comprueba el identificador exacto en la documentación de modelos de Anthropic y cámbialo si hace falta.
    - `ACCESS_CODE`: el código que compartes con quien vaya a probar.
+   - `ADMIN_CODE`: tu código de administrador (distinto y privado). Entrando con él ves la pestaña «Pruebas del equipo»: todas las sesiones de todo el mundo, paso a paso, aunque las hayan descartado, y puedes rescatar cualquiera como versión nueva.
    - `SUPABASE_URL`: `https://bxndeeoxvkqikmfcmook.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY`: en Supabase, ve a Project Settings → API Keys y copia la clave **secret** (o la `service_role` en las claves antiguas). No la publiques nunca.
 4. En Advanced, pon **Health Check Path** = `/api/config`, y despliega.

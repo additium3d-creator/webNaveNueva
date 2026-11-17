@@ -17,6 +17,7 @@ const PORT = process.env.PORT || 3000;
 const DATA = process.env.DATA_DIR || path.join(__dirname, 'data');
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 const ACCESS_CODE = process.env.ACCESS_CODE || '';
+const ADMIN_CODE = process.env.ADMIN_CODE || '';
 const MOCK = !process.env.ANTHROPIC_API_KEY || process.env.MOCK_AGENT === '1';
 const MAX_STEPS = +(process.env.AGENT_MAX_STEPS || 30);
 const anthropic = MOCK ? null : new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -26,6 +27,9 @@ const serial = fn => (lock = lock.then(fn, fn));
 const sidOk = s => /^[a-z0-9]{10,40}$/.test(s);
 async function loadSession(sid) { return sidOk(sid) ? store.getSession(sid) : null; }
 async function currentDraft(s) { return store.getDraft(s.id, s.stack); }
+// Cada borrador se guarda con una clave nueva y nunca se borra: así el administrador puede revisar todo lo que se ha probado.
+const draftOf = t => t.draft ?? t.stack;
+const nextKey = s => Math.max(s.stack || 0, ...s.turns.map(t => draftOf(t) || 0)) + 1;
 async function seed() {
   if ((await store.listVersions()).length) return;
   await store.addVersion({ id: 1, parent: null, title: 'Versión inicial', notes: 'Modelo construido a partir de los planos E-481 y el boceto de distribución.', author: 'Additium3D', instructions: [] },
@@ -163,18 +167,21 @@ async function runAgent(sess, instruction, send, image, photos = []) {
 const app = express();
 app.use(express.json({ limit: '25mb' }));
 const cookieCode = req => decodeURIComponent((req.headers.cookie || '').split(/;\s*/).find(c => c.startsWith('nave_ac='))?.slice(8) || '');
-const authed = req => !ACCESS_CODE || req.get('x-access-code') === ACCESS_CODE || cookieCode(req) === ACCESS_CODE;
+const codeOf = req => req.get('x-access-code') || cookieCode(req);
+const isAdmin = req => !!ADMIN_CODE && codeOf(req) === ADMIN_CODE;
+const authed = req => isAdmin(req) || !ACCESS_CODE || codeOf(req) === ACCESS_CODE;
 const guard = (req, res, next) => (authed(req) ? next() : res.status(401).json({ error: 'Código de acceso incorrecto.' }));
+const adminGuard = (req, res, next) => (isAdmin(req) ? next() : res.status(403).json({ error: 'Solo para administradores.' }));
 const hits = new Map();
 const rate = (req, res, next) => { const k = req.ip, now = Date.now(), h = (hits.get(k) || []).filter(t => now - t < 3600e3); if (h.length >= 60) return res.status(429).json({ error: 'Demasiadas peticiones en la última hora.' }); h.push(now); hits.set(k, h); next(); };
 
 const expose = html => html.replace('window.__nave={stats,', 'window.__nave={stats,scene,camera,renderer,MAT,THREE,');
 const wrap = fn => (req, res) => Promise.resolve(fn(req, res)).catch(e => { console.error(e); if (!res.headersSent) res.status(500).json({ error: e.message }); });
-app.get('/api/config', wrap(async (req, res) => res.json({ model: MODEL, mock: MOCK, storage: store.kind, requiresCode: !!ACCESS_CODE, authed: authed(req), latest: (await store.listVersions()).at(-1)?.id })));
+app.get('/api/config', wrap(async (req, res) => res.json({ model: MODEL, mock: MOCK, storage: store.kind, requiresCode: !!(ACCESS_CODE || ADMIN_CODE), authed: authed(req), admin: isAdmin(req), latest: (await store.listVersions()).at(-1)?.id })));
 app.post('/api/login', (req, res) => {
-  if (ACCESS_CODE && req.body?.code !== ACCESS_CODE) return res.status(401).json({ error: 'Código de acceso incorrecto.' });
+  const c = req.body?.code; if ((ACCESS_CODE || ADMIN_CODE) && c !== ACCESS_CODE && !(ADMIN_CODE && c === ADMIN_CODE)) return res.status(401).json({ error: 'Código de acceso incorrecto.' });
   res.setHeader('Set-Cookie', `nave_ac=${encodeURIComponent(req.body?.code || '')}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
-  res.json({ ok: true });
+  res.json({ ok: true, admin: !!ADMIN_CODE && req.body?.code === ADMIN_CODE });
 });
 app.get('/api/versions', guard, wrap(async (_q, res) => res.json(await store.listVersions())));
 app.get('/api/versions/:id/diff', guard, wrap(async (req, res) => {
@@ -218,8 +225,8 @@ app.post('/api/sessions/:sid/message', guard, rate, async (req, res) => {
     send({ type: 'tool', text: MOCK ? 'preparando' : `pensando con ${MODEL}` });
     const { text: answer, ctx } = await runAgent(s, text, send, img, photos);
     const changed = ctx.edits > 0 && !ctx.lastErrors.length;
-    if (changed) { s.stack += 1; await store.putDraft(s.id, s.stack, ctx.src); }
-    s.turns.push({ at: new Date().toISOString(), instruction: text, photos: photos.length, summary: answer, changed, stack: s.stack });
+    let draft = null; if (changed) { draft = nextKey(s); await store.putDraft(s.id, draft, ctx.src); s.stack = draft; }
+    s.turns.push({ at: new Date().toISOString(), instruction: text, photos: photos.length, summary: answer, changed, stack: s.stack, draft });
     s.history.push({ user: text + (photos.length ? `\n(Adjuntó ${photos.length} foto${photos.length > 1 ? 's' : ''} de referencia en este mensaje.)` : ''), assistant: answer + (changed ? '' : '\n(No se ha aplicado ningún cambio en este turno.)') });
     await store.saveSession(s);
     send({ type: 'assistant', text: answer, changed, errors: ctx.lastErrors, pending: s.turns.filter(t => t.changed && !t.undone).length });
@@ -230,8 +237,8 @@ app.post('/api/sessions/:sid/message', guard, rate, async (req, res) => {
 app.post('/api/sessions/:sid/undo', guard, wrap(async (req, res) => {
   const s = await loadSession(req.params.sid); if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
   if (s.stack === 0) return res.status(400).json({ error: 'No hay cambios que deshacer.' });
-  await store.delDraft(s.id, s.stack); s.stack -= 1;
-  const t = [...s.turns].reverse().find(t => t.changed && !t.undone); if (t) t.undone = true;
+  const t = [...s.turns].reverse().find(t => t.changed && !t.undone); if (t) { t.undone = true; t.undoneAt = new Date().toISOString(); }
+  const prev = [...s.turns].reverse().find(t => t.changed && !t.undone); s.stack = prev ? draftOf(prev) : 0;
   s.history.push({ user: '(deshacer)', assistant: 'Se ha deshecho el último cambio aplicado.' });
   await store.saveSession(s); res.json(s);
 }));
@@ -239,24 +246,47 @@ app.post('/api/sessions/:sid/discard', guard, wrap(async (req, res) => {
   const s = await loadSession(req.params.sid); if (!s) return res.status(404).json({ error: 'No existe.' });
   s.status = 'discarded'; await store.saveSession(s); res.json({ ok: true });
 }));
+async function makeVersion(s, k, applied, title, notes, author) {
+  const src = await store.getDraft(s.id, k), baseSrc = await store.getScene(s.baseVersion);
+  if (src == null) { const e = new Error('Ese borrador no existe.'); e.status = 404; throw e; }
+  const base = baseSrc.split('\n'), now = src.split('\n'), setB = new Set(base), setN = new Set(now);
+  const meta = { parent: s.baseVersion, title: String(title || applied[0]?.instruction || 'Sin título').slice(0, 120), notes: String(notes || '').slice(0, 4000),
+    author, session: s.id, instructions: applied.map(t => ({ instruction: t.instruction, summary: (t.summary || '').slice(0, 1500), at: t.at })),
+    added: now.filter(l => !setB.has(l)).length, removed: base.filter(l => !setN.has(l)).length };
+  for (let tries = 0; tries < 3; tries++) {
+    const id = Math.max(0, ...(await store.listVersions()).map(x => x.id)) + 1;
+    try { await store.addVersion({ id, ...meta }, src); return { id, ...meta, createdAt: new Date().toISOString() }; }
+    catch (e) { if (e.status !== 409) throw e; }
+  }
+  const e = new Error('No se pudo numerar la versión; vuelve a intentarlo.'); e.status = 409; throw e;
+}
 app.post('/api/sessions/:sid/save', guard, wrap((req, res) => serial(async () => {
   const s = await loadSession(req.params.sid); if (!s || s.status !== 'open') return res.status(404).json({ error: 'Sesión no disponible.' });
   const applied = s.turns.filter(t => t.changed && !t.undone);
   if (!applied.length || s.stack === 0) return res.status(400).json({ error: 'No hay cambios que guardar.' });
-  const src = await currentDraft(s), baseSrc = await store.getScene(s.baseVersion);
-  const base = baseSrc.split('\n'), now = src.split('\n'), setB = new Set(base), setN = new Set(now);
-  const meta = { parent: s.baseVersion, title: String(req.body?.title || applied[0].instruction).slice(0, 120), notes: String(req.body?.notes || '').slice(0, 4000),
-    author: s.author, session: s.id, instructions: applied.map(t => ({ instruction: t.instruction, summary: t.summary.slice(0, 1500), at: t.at })),
-    added: now.filter(l => !setB.has(l)).length, removed: base.filter(l => !setN.has(l)).length };
-  let v;
-  for (let tries = 0; tries < 3; tries++) {
-    const id = Math.max(0, ...(await store.listVersions()).map(x => x.id)) + 1;
-    try { await store.addVersion({ id, ...meta }, src); v = { id, ...meta, createdAt: new Date().toISOString() }; break; }
-    catch (e) { if (e.status !== 409) throw e; }
-  }
-  if (!v) return res.status(409).json({ error: 'No se pudo numerar la versión; vuelve a intentarlo.' });
+  const v = await makeVersion(s, s.stack, applied, req.body?.title, req.body?.notes, s.author);
   s.status = 'saved'; s.savedAs = v.id; await store.saveSession(s);
   res.json(v);
+})));
+
+/* ---------- administración: todas las pruebas del equipo ---------- */
+app.get('/api/admin/sessions', adminGuard, wrap(async (_q, res) => {
+  const list = await store.listSessions();
+  res.json(list.map(s => ({ id: s.id, author: s.author, baseVersion: s.baseVersion, status: s.status, savedAs: s.savedAs, stack: s.stack, createdAt: s.createdAt, updatedAt: s.updatedAt,
+    promoted: s.promoted || [], turns: (s.turns || []).map(t => ({ at: t.at, instruction: t.instruction, summary: (t.summary || '').slice(0, 600), changed: t.changed, undone: !!t.undone, photos: t.photos || 0, draft: t.changed ? draftOf(t) : null })) })));
+}));
+app.get('/scene/d/:sid/:k', adminGuard, wrap(async (req, res) => {
+  if (!sidOk(req.params.sid)) return res.status(404).send('No existe');
+  const t = await store.getDraft(req.params.sid, +req.params.k | 0); if (t == null) return res.status(404).send('Este borrador no se conserva (se deshizo antes de activar el modo administrador).');
+  res.type('html').set('Cache-Control', 'no-store').send(expose(t));
+}));
+app.post('/api/admin/sessions/:sid/promote', adminGuard, wrap((req, res) => serial(async () => {
+  const s = await loadSession(req.params.sid); if (!s) return res.status(404).json({ error: 'No existe.' });
+  const k = +req.body?.draft | 0 || s.stack; if (!k) return res.status(400).json({ error: 'Esa prueba no tiene cambios.' });
+  const applied = s.turns.filter(t => t.changed && draftOf(t) <= k && (!t.undone || draftOf(t) === k));
+  const v = await makeVersion(s, k, applied, req.body?.title, `Rescatada por ${String(req.body?.by || 'administrador').slice(0, 60)} de la prueba de ${s.author}.${req.body?.notes ? ' ' + String(req.body.notes) : ''}`, s.author);
+  s.promoted = [...(s.promoted || []), { draft: k, version: v.id, at: new Date().toISOString() }];
+  await store.saveSession(s); res.json(v);
 })));
 
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));

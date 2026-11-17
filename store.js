@@ -8,8 +8,8 @@ const SB_KEY = clean(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABA
 const META = 'id,parent,title,notes,author,created_at,session_id,instructions,added,removed';
 
 const toV = r => r && ({ id: r.id, parent: r.parent, title: r.title, notes: r.notes, author: r.author, createdAt: r.created_at, session: r.session_id, instructions: r.instructions || [], added: r.added, removed: r.removed });
-const toS = r => r && ({ id: r.id, author: r.author, baseVersion: r.base_version, status: r.status, stack: r.stack, turns: r.turns || [], history: r.history || [], savedAs: r.saved_as, createdAt: r.created_at, updatedAt: r.updated_at });
-const fromS = s => ({ id: s.id, author: s.author, base_version: s.baseVersion, status: s.status, stack: s.stack, turns: s.turns, history: s.history, saved_as: s.savedAs ?? null, updated_at: new Date().toISOString() });
+const toS = r => r && ({ id: r.id, author: r.author, baseVersion: r.base_version, status: r.status, stack: r.stack, turns: r.turns || [], history: r.history || [], savedAs: r.saved_as, promoted: r.promoted || [], createdAt: r.created_at, updatedAt: r.updated_at });
+const fromS = s => ({ id: s.id, author: s.author, base_version: s.baseVersion, status: s.status, stack: s.stack, turns: s.turns, history: s.history, saved_as: s.savedAs ?? null, promoted: s.promoted || [], updated_at: new Date().toISOString() });
 
 function supabaseStore() {
   async function q(p, { method = 'GET', body, prefer } = {}) {
@@ -27,6 +27,7 @@ function supabaseStore() {
     async addVersion(v, scene) {
       await q('nave_versions', { method: 'POST', prefer: 'return=minimal', body: { id: v.id, parent: v.parent, title: v.title, notes: v.notes || '', author: v.author, session_id: v.session || null, instructions: v.instructions || [], added: v.added || 0, removed: v.removed || 0, scene } });
     },
+    async listSessions() { return (await q('nave_sessions?select=id,author,base_version,status,stack,turns,saved_as,promoted,created_at,updated_at&order=created_at.desc&limit=500')).map(toS); },
     async getSession(id) { const r = await q(`nave_sessions?select=*&id=eq.${encodeURIComponent(id)}`); return toS(r[0]); },
     async saveSession(s) { await q('nave_sessions?on_conflict=id', { method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal', body: fromS(s) }); },
     async getDraft(sid, k) { const r = await q(`nave_drafts?select=scene&session_id=eq.${encodeURIComponent(sid)}&k=eq.${+k}`); return r[0]?.scene ?? null; },
@@ -48,6 +49,7 @@ function fileStore(DATA) {
     async getScene(id) { const f = path.join(V, `v${+id}.html`); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null; },
     async addVersion(v, scene) { const l = rj(IDX, []); if (l.some(x => x.id === v.id)) { const e = new Error('duplicada'); e.status = 409; throw e; }
       fs.writeFileSync(path.join(V, `v${v.id}.html`), scene); l.push({ ...v, createdAt: v.createdAt || new Date().toISOString() }); wj(IDX, l); },
+    async listSessions() { return fs.readdirSync(S).map(id => rj(sf(id), null)).filter(Boolean).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))); },
     async getSession(id) { return rj(sf(id), null); },
     async saveSession(s) { fs.mkdirSync(path.join(S, s.id), { recursive: true }); wj(sf(s.id), { ...s, updatedAt: new Date().toISOString() }); },
     async getDraft(sid, k) { const f = df(sid, k); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null; },

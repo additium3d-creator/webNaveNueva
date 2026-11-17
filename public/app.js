@@ -18,7 +18,8 @@ async function api(p, opt = {}) {
 function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => (el.hidden = true), 3200); }
 
 /* ---------- visor ---------- */
-function loadViewer(url, keepPose) {
+function loadViewer(url, keepPose, peek) {
+  st.peek = peek || null; $('#peek').hidden = !peek; if (peek) $('#peekTxt').textContent = peek.label; renderSessions();
   if (keepPose) { try { st.pose = viewer.contentWindow.__nave.getPose(); } catch { st.pose = null; } } else st.pose = null;
   $('#loading').hidden = false; $('#sceneErr').hidden = true; if (st.points?.length) { st.points = []; renderPins(); }
   viewer.src = `${url}?embed=1&t=${Date.now()}`;
@@ -45,8 +46,9 @@ const pending = () => (st.sess?.turns || []).filter(t => t.changed && !t.undone)
 function updateState() {
   const v = st.versions.find(x => x.id === (st.sess ? st.sess.baseVersion : st.view)) || {};
   const n = pending();
-  $('#viewing').textContent = st.sess ? `Borrador sobre v${st.sess.baseVersion} · ${v.title || ''}` : `v${v.id ?? '—'} · ${v.title || ''}`;
+  $('#viewing').textContent = st.peek ? st.peek.label : st.sess ? `Borrador sobre v${st.sess.baseVersion} · ${v.title || ''}` : `v${v.id ?? '—'} · ${v.title || ''}`;
   $('#state').textContent = st.busy ? 'El asistente está aplicando el cambio…'
+    : st.peek ? `Modo administrador · ${st.peek.label} · solo lectura (pulsa «Volver» para salir)`
     : st.sess ? `Sesión de cambios sobre v${st.sess.baseVersion} · ${n} ${n === 1 ? 'cambio' : 'cambios'} sin guardar`
     : `Viendo v${v.id ?? '—'}${v.id === st.versions.at(-1)?.id ? ' (la más reciente)' : ''} · escribe abajo para empezar una sesión de cambios`;
   $('#dot').className = 'dot' + (st.busy ? ' busy' : st.sess ? ' live' : '');
@@ -105,7 +107,7 @@ async function send(text, image, photos = []) {
         if (ev.type === 'assistant') {
           live?.classList.remove('live');
           add('msg bot', `<span class="meta">Asistente${ev.changed ? ' · cambio aplicado' : ' · sin cambios'}</span>${esc(ev.text)}${ev.errors?.length ? `\n\n⚠ ${esc(ev.errors.join('\n'))}` : ''}`);
-          st.sess = await api(`/api/sessions/${st.sess.id}`);
+          st.sess = await api(`/api/sessions/${st.sess.id}`); refreshSessions();
           if (ev.changed) { st.autoFixed = text.startsWith('El visor da este error') ? st.autoFixed : false; loadViewer(`/scene/s/${st.sess.id}`, true); }
         }
         if (ev.type === 'error') add('msg err', `<span class="meta">Error</span>${esc(ev.text)}`);
@@ -178,7 +180,7 @@ function renderVersions() {
 }
 $('#vlist').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.view) { if (st.sess) return toast('Guarda o descarta la sesión abierta antes de cambiar de versión.'); viewVersion(+b.dataset.view); }
+  if (b.dataset.view) { if (st.sess && !st.cfg?.admin) return toast('Guarda o descarta la sesión abierta antes de cambiar de versión.'); if (st.sess) loadViewer(`/scene/v/${b.dataset.view}`, true, { label: `Viendo v${b.dataset.view} (tu sesión sigue abierta)` }); else viewVersion(+b.dataset.view); }
   if (b.dataset.branch) { viewVersion(+b.dataset.branch); $('#hist').hidden = true; msg.focus(); toast(`Tu próximo mensaje empezará una sesión sobre v${b.dataset.branch}`); }
   if (b.dataset.diff) {
     const t = await api(`/api/versions/${b.dataset.diff}/diff`);
@@ -186,6 +188,53 @@ $('#vlist').addEventListener('click', async e => {
     modal(`<span class="eyebrow">Trazabilidad</span><h2>Cambios de v${b.dataset.diff}</h2><pre class="diff">${html}</pre><div class="row"><button class="ghost" data-close>Cerrar</button></div>`, true);
   }
 });
+/* ---------- administrador: pruebas del equipo ---------- */
+st.adminSessions = [];
+const STATUS = { open: 'en curso', saved: 'guardada', discarded: 'descartada' };
+async function refreshSessions() { if (!st.cfg?.admin) return; try { st.adminSessions = await api('/api/admin/sessions'); } catch (e) { return toast(e.message); } renderSessions(); }
+function renderSessions() {
+  if (!st.cfg?.admin) return;
+  const L = st.adminSessions.filter(s => s.turns.length);
+  $('#scount').textContent = L.length;
+  $('#slist').innerHTML = L.length ? L.map(s => {
+    const n = s.turns.filter(t => t.changed && !t.undone).length;
+    const badge = s.status === 'saved' ? `guardada como v${s.savedAs}` : STATUS[s.status] || s.status;
+    return `<li class="v"><div class="v-top"><span class="v-title">${esc(s.author)}</span><span class="badge ${s.status}">${esc(badge)}</span></div>
+    <div class="v-meta">${fmtDate(s.createdAt)} · sobre v${s.baseVersion} · ${s.turns.length} mensaje${s.turns.length > 1 ? 's' : ''} · ${n} cambio${n === 1 ? '' : 's'} vivo${n === 1 ? '' : 's'}${s.promoted.length ? ' · rescatada: ' + s.promoted.map(p => 'v' + p.version).join(', ') : ''}</div>
+    <ol class="turns">${s.turns.map((t, i) => `<li class="${t.undone ? 'undone' : ''}${st.peek?.sid === s.id && st.peek?.k === t.draft ? ' cur' : ''}"><div><span class="ti">${esc(t.instruction.split('\n\n[Puntos')[0])}</span><span class="ts">${fmtDate(t.at)}${t.photos ? ` · ${t.photos} foto${t.photos > 1 ? 's' : ''}` : ''}${t.changed ? (t.undone ? ' · deshecho' : '') : ' · sin cambios'}</span></div>${t.changed ? `<button class="ghost" data-peek="${s.id}" data-k="${t.draft}" data-i="${i + 1}">Ver</button>` : ''}</li>`).join('')}</ol>
+    <div class="v-act">${s.stack ? `<button class="ghost" data-peek="${s.id}" data-k="${s.stack}" data-i="final">Ver resultado final</button>` : ''}${s.stack && s.status !== 'saved' ? `<button class="ghost" data-promote="${s.id}">Guardar como versión</button>` : ''}</div></li>`;
+  }).join('') : '<li class="v-meta">Aún nadie ha probado cambios.</li>';
+}
+$('#slist').addEventListener('click', async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const s = st.adminSessions.find(x => x.id === (b.dataset.peek || b.dataset.promote)); if (!s) return;
+  if (b.dataset.peek) {
+    const k = +b.dataset.k, label = `Prueba de ${s.author} · ${b.dataset.i === 'final' ? 'resultado final' : 'tras el paso ' + b.dataset.i}`;
+    loadViewer(`/scene/d/${s.id}/${k}`, true, { sid: s.id, k, label }); updateState();
+  }
+  if (b.dataset.promote) {
+    const k = st.peek?.sid === s.id ? st.peek.k : s.stack, live = s.turns.filter(t => t.changed && !t.undone);
+    modal(`<span class="eyebrow">Rescatar prueba</span><h2>Guardar la prueba de ${esc(s.author)}</h2>
+      <p>Se crea una versión nueva a partir de ${st.peek?.sid === s.id ? 'lo que estás viendo ahora' : 'su resultado final'}, basada en v${s.baseVersion}. La autoría queda a nombre de ${esc(s.author)}.</p>
+      <div class="field"><label for="pTitle">Título</label><input id="pTitle" maxlength="120" value="${esc((live[0] || s.turns[0]).instruction.split('\n')[0].slice(0, 90))}"></div>
+      <div class="field"><label for="pNotes">Notas (opcional)</label><textarea id="pNotes" rows="2"></textarea></div>
+      <div class="row"><button class="ghost" data-close>Cancelar</button><button id="doPromote" class="primary">Guardar versión</button></div>`);
+    $('#doPromote').onclick = async () => {
+      $('#doPromote').disabled = true;
+      try { const v = await api(`/api/admin/sessions/${s.id}/promote`, { method: 'POST', body: JSON.stringify({ draft: k, title: $('#pTitle').value, notes: $('#pNotes').value, by: st.author }) });
+        closeModal(); await refreshVersions(); await refreshSessions(); toast(`Guardada como v${v.id}`); }
+      catch (err) { $('#doPromote').disabled = false; toast(err.message); }
+    };
+  }
+});
+$('#tabs').addEventListener('click', e => {
+  const b = e.target.closest('[data-tab]'); if (!b) return;
+  $('#tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  $('#vlist').hidden = b.dataset.tab !== 'v'; $('#slist').hidden = b.dataset.tab !== 's';
+  if (b.dataset.tab === 's') refreshSessions();
+});
+$('#peekBack').onclick = () => { if (st.sess) loadViewer(`/scene/s/${st.sess.id}`, true); else viewVersion(st.view); };
+
 $('#btnHist').onclick = () => { $('#hist').hidden = !$('#hist').hidden; };
 $('#histClose').onclick = () => ($('#hist').hidden = true);
 
@@ -292,6 +341,7 @@ function showLogin(err) {
       const code = $('#lCode')?.value || '';
       const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
       if (!r.ok) return showLogin('El código de acceso no es válido.').then(res);
+      const lr = await r.json().catch(() => ({})); if (st.cfg) st.cfg.admin = !!lr.admin; applyAdmin();
       st.author = name; st.code = code; store.set('nave.author', name); store.set('nave.code', code);
       delete $('#modal').dataset.locked; closeModal(); updateState(); res();
     };
@@ -299,6 +349,7 @@ function showLogin(err) {
   });
 }
 const askName = () => showLogin();
+function applyAdmin() { const a = !!st.cfg?.admin; $('#tabs').hidden = !a; $('#btnHist').firstChild.textContent = a ? 'Historial y pruebas ' : 'Historial '; if (a) refreshSessions(); else { $('#slist').hidden = true; $('#vlist').hidden = false; } }
 $('#btnWho').onclick = () => showLogin();
 
 /* ---------- fin de sesión: pedir guardar ---------- */
@@ -313,9 +364,9 @@ setInterval(() => {
 /* ---------- arranque ---------- */
 (async function init() {
   st.cfg = await fetch('/api/config').then(r => r.json());
-  if (st.cfg.requiresCode && st.code && !st.cfg.authed) { const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: st.code }) }); if (r.ok) st.cfg.authed = true; else st.code = ''; }
+  if (st.cfg.requiresCode && st.code && !st.cfg.authed) { const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: st.code }) }); if (r.ok) { st.cfg.authed = true; st.cfg.admin = !!(await r.json().catch(() => ({}))).admin; } else st.code = ''; }
   if ((st.cfg.requiresCode && !st.cfg.authed) || !st.author) await showLogin();
-  await refreshVersions();
+  applyAdmin(); await refreshVersions();
   const sid = store.get('nave.sid');
   if (sid) { try { const s = await api(`/api/sessions/${sid}`); if (s.status === 'open') st.sess = s; } catch {} }
   if (st.sess) { st.view = st.sess.baseVersion; replayTurns(); loadViewer(`/scene/s/${st.sess.id}`); add('msg bot', `<span class="meta">Sesión recuperada</span>Tienes ${pending()} cambios sin guardar sobre v${st.sess.baseVersion}. Sigue pidiendo cambios o guarda la versión.`); }
