@@ -21,7 +21,7 @@ function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = fals
 function loadViewer(url, keepPose, peek) {
   st.peek = peek || null; $('#peek').hidden = !peek; if (peek) $('#peekTxt').textContent = peek.label; renderSessions();
   if (keepPose) { try { st.pose = viewer.contentWindow.__nave.getPose(); } catch { st.pose = null; } } else st.pose = null;
-  $('#loading').hidden = false; $('#sceneErr').hidden = true; if (st.points?.length) { st.points = []; renderPins(); }
+  $('#loading').hidden = false; $('#sceneErr').hidden = true; if (st.points?.length) { st.points = []; renderPins(); } if (st.meas?.length || st.mA) { st.meas = []; st.mA = null; st.mTmp = null; renderMeas(); }
   viewer.src = `${url}?embed=1&t=${Date.now()}`;
 }
 window.addEventListener('message', e => {
@@ -258,12 +258,16 @@ function faceName(n) {
   return Math.abs(x) > Math.abs(y) ? (x > 0 ? 'cara que mira a +X (hacia la fachada)' : 'cara que mira a −X (hacia el fondo)') : (y > 0 ? 'cara que mira a +Y (lateral derecho)' : 'cara que mira a −Y (lateral izquierdo)');
 }
 function setPick(on) {
+  st.mode = on ? 'pick' : null; if (on) setMeasure(false, true);
+  if (!on) { cancelMeasure(); $('#btnMeasure').classList.remove('on'); }
+  $('#pickTxt').textContent = 'Haz clic en la escena para marcar un punto · Esc para terminar';
   if (on) { const N = viewer.contentWindow?.__nave; if (!N?.scene) return toast('Espera a que cargue la escena para señalar.'); try { viewer.contentWindow.document.exitPointerLock?.(); } catch {} }
   $('#pick').hidden = !on; $('#btnPick').classList.toggle('on', on);
 }
-$('#btnPick').onclick = () => setPick($('#pick').hidden);
-window.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#pick').hidden) setPick(false); });
+$('#btnPick').onclick = () => setPick(st.mode !== 'pick');
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#pick').hidden) { if (st.mode === 'measure') { if (st.mA) cancelMeasure(); else setMeasure(false); } else setPick(false); } });
 $('#pick').addEventListener('click', e => {
+  if (st.mode === 'measure') return measureClick(e);
   const w = viewer.contentWindow, N = w.__nave, T = w.THREE; if (!N?.scene) return;
   const r = viewer.getBoundingClientRect();
   const rc = new T.Raycaster(); rc.setFromCamera(new T.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), N.camera);
@@ -279,6 +283,75 @@ $('#pick').addEventListener('click', e => {
   sp.renderOrder = 999; sp.userData.pin = true; sp.scale.set(.34, .34, 1); sp.position.copy(p); if (n) sp.position.addScaledVector(n, .14); N.scene.add(sp);
   st.points.push({ idx, X, Y, Z, zone: zoneAt(X, Y, Z), mat, face: n ? faceName(n) : '', sprite: sp });
   renderPins(); msg.focus();
+});
+/* ---------- herramienta MEDIR ---------- */
+st.meas = []; st.mA = null; st.mTmp = null;
+const fm = n => n.toFixed(2).replace('.', ',');
+function setMeasure(on, silent) {
+  if (on) { const N = viewer.contentWindow?.__nave; if (!N?.scene) return toast('Espera a que cargue la escena para medir.'); try { viewer.contentWindow.document.exitPointerLock?.(); } catch {} }
+  if (!on) cancelMeasure();
+  if (on) { st.mode = 'measure'; setPick0(); $('#pickTxt').textContent = 'Medir: clic en el punto de partida y luego en el de llegada · Esc para terminar'; }
+  else if (st.mode === 'measure') st.mode = null;
+  $('#btnMeasure').classList.toggle('on', on);
+  if (!silent) { $('#pick').hidden = !on; }
+  else if (on) $('#pick').hidden = false;
+}
+function setPick0() { $('#btnPick').classList.remove('on'); $('#pick').hidden = false; }
+$('#btnMeasure').onclick = () => setMeasure(st.mode !== 'measure');
+function rayAt(e) {
+  const w = viewer.contentWindow, N = w.__nave, T = w.THREE, r = viewer.getBoundingClientRect();
+  const rc = new T.Raycaster(); rc.setFromCamera(new T.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), N.camera);
+  const hit = rc.intersectObjects(N.scene.children, true).find(h => h.distance < 400 && !h.object.userData.pin && !(h.object.material?.transparent && (h.object.material.opacity ?? 1) < .45));
+  return hit ? { p: hit.point.clone(), w, N, T } : null;
+}
+function mkLabel(T, text) {
+  const c = document.createElement('canvas'); c.width = 320; c.height = 110; const g = c.getContext('2d');
+  g.fillStyle = 'rgba(0,20,14,.92)'; g.strokeStyle = '#1ec29b'; g.lineWidth = 6;
+  g.beginPath(); g.roundRect ? g.roundRect(6, 6, 308, 98, 26) : g.rect(6, 6, 308, 98); g.fill(); g.stroke();
+  g.fillStyle = '#fff'; g.font = '700 58px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 160, 57);
+  const sp = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(c), depthTest: false, transparent: true }));
+  sp.renderOrder = 1000; sp.userData.pin = true; return sp;
+}
+function mkSeg(T, a, b) {
+  const grp = new T.Group(); grp.userData.pin = true;
+  const mat = new T.MeshBasicMaterial({ color: 0x1ec29b, depthTest: false, transparent: true });
+  const cyl = new T.Mesh(new T.CylinderGeometry(.014, .014, 1, 6), mat); cyl.userData.pin = true; cyl.renderOrder = 998; grp.add(cyl);
+  for (let i = 0; i < 2; i++) { const s = new T.Mesh(new T.SphereGeometry(.05, 12, 8), mat); s.userData.pin = true; s.renderOrder = 998; grp.add(s); }
+  const lab = mkLabel(T, '0,00 m'); grp.add(lab); grp.userData.lab = lab; grp.userData.T = T;
+  setSeg(grp, a, b); return grp;
+}
+function setSeg(grp, a, b) {
+  const T = grp.userData.T, d = b.clone().sub(a), len = d.length(), [cyl, s1, s2] = grp.children;
+  cyl.position.copy(a).add(b).multiplyScalar(.5); cyl.scale.set(1, Math.max(len, .0001), 1);
+  if (len > 1e-6) cyl.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), d.clone().normalize());
+  s1.position.copy(a); s2.position.copy(b);
+  const lab = grp.userData.lab; lab.position.copy(a).add(b).multiplyScalar(.5); lab.position.y += .22;
+  const k = Math.min(1.4, Math.max(.5, len * .09 + .45)); lab.scale.set(.95 * k, .33 * k, 1);
+  const old = lab.material.map; lab.material.map = mkLabel(T, fm(len) + ' m').material.map; old?.dispose();
+}
+function measureClick(e) {
+  const r = rayAt(e); if (!r) return toast('Ahí no hay nada que medir.');
+  if (!st.mA) { st.mA = r.p; st.mTmp = mkSeg(r.T, r.p, r.p); r.N.scene.add(st.mTmp); return; }
+  const a = st.mA, b = r.p, grp = st.mTmp; setSeg(grp, a, b); st.mA = null; st.mTmp = null;
+  const idx = (st.meas.at(-1)?.idx || 0) + 1;
+  st.meas.push({ idx, grp, d: b.clone().sub(a), len: a.distanceTo(b) }); renderMeas();
+}
+$('#pick').addEventListener('mousemove', e => {
+  if (st.mode !== 'measure' || !st.mA || st.mMoving) return; st.mMoving = true;
+  requestAnimationFrame(() => { st.mMoving = false; if (!st.mA || !st.mTmp) return; const r = rayAt(e); if (r) setSeg(st.mTmp, st.mA, r.p); });
+});
+function cancelMeasure() { if (st.mTmp) { try { st.mTmp.parent?.remove(st.mTmp); } catch {} } st.mA = null; st.mTmp = null; }
+function clearMeas() { cancelMeasure(); for (const m of st.meas) { try { m.grp.parent?.remove(m.grp); } catch {} } st.meas = []; renderMeas(); }
+function renderMeas() {
+  // En la escena, X es el eje largo, Y el ancho y Z la altura: la escena usa (x, z, -y).
+  $('#meas').innerHTML = st.meas.map(m => `<span class="pin m"><b>${m.idx}</b><span>${fm(m.len)} m · largo ${fm(Math.abs(m.d.x))} · ancho ${fm(Math.abs(m.d.z))} · alto ${fm(Math.abs(m.d.y))}</span><button type="button" data-unmeas="${m.idx}" aria-label="Quitar medida ${m.idx}">✕</button></span>`).join('')
+    + (st.meas.length > 1 ? '<span class="pin clear" data-clearmeas>Borrar todas</span>' : '');
+}
+$('#meas').addEventListener('click', e => {
+  if (e.target.closest('[data-clearmeas]')) return clearMeas();
+  const b = e.target.closest('[data-unmeas]'); if (!b) return;
+  const i = st.meas.findIndex(m => m.idx === +b.dataset.unmeas); if (i < 0) return;
+  try { st.meas[i].grp.parent?.remove(st.meas[i].grp); } catch {} st.meas.splice(i, 1); renderMeas();
 });
 function renderPins() {
   $('#pins').innerHTML = st.points.map(p => `<span class="pin"><b>${p.idx}</b><span>${esc(p.zone)} · X ${p.X.toFixed(2)} Y ${p.Y.toFixed(2)} Z ${p.Z.toFixed(2)}${p.mat ? ' · ' + esc(p.mat) : ''}</span><button type="button" data-unpin="${p.idx}" aria-label="Quitar punto ${p.idx}">✕</button></span>`).join('');
@@ -326,8 +399,8 @@ const dock = $('#dock');
 dock.addEventListener('drop', e => { if (e.dataTransfer?.files?.length) { e.preventDefault(); addPhotos(e.dataTransfer.files); } });
 
 /* ---------- modales: acceso y nombre ---------- */
-function modal(html, wide) { $('#modalBody').innerHTML = html; $('#modal .sheet').classList.toggle('wide', !!wide); $('#modal').hidden = false; $('#modal').querySelectorAll('[data-close]').forEach(b => b.onclick = closeModal); $('#modal').querySelector('input,textarea')?.focus(); }
-function closeModal() { $('#modal').hidden = true; }
+function modal(html, wide) { $('#modalBody').innerHTML = html; $('#modal .sheet').classList.remove('xl'); $('#modal .sheet').classList.toggle('wide', !!wide); $('#modal').hidden = false; $('#modal').querySelectorAll('[data-close]').forEach(b => b.onclick = closeModal); $('#modal').querySelector('input,textarea')?.focus(); }
+function closeModal() { $('#modal').hidden = true; $('#modalBody').innerHTML = ''; }
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal' && !$('#modal').dataset.locked) closeModal(); });
 function showLogin(err) {
   return new Promise(res => {

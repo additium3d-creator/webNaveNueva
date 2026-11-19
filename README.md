@@ -61,3 +61,10 @@ Abre http://localhost:3000
 - Cada mensaje es una pequeña sesión del agente con herramientas: busca, lee fragmentos y edita. La guía fija va en caché de prompt, así que el coste por cambio es moderado.
 - Hay un límite de 60 mensajes por hora y por IP.
 - Cada sesión procesa un cambio a la vez. Varias personas pueden editar en paralelo, cada una en su sesión.
+
+
+## Novedades 1.4.0
+
+- **Vistas generales · fotografía** (pestaña en la cabecera, aparte del visor 3D): 10 vistas generales de la nave, descarga individual y en ZIP, y «Vista nueva» para fotografiar cualquier encuadre. Las fotos se guardan en la tabla `nave_photos` de Supabase (migración ya aplicada) y quedan ligadas a la versión de la nave que se fotografió.
+- **Medir** en el visor 3D: clic en dos puntos y da la distancia (total, largo, ancho y alto).
+- Rótulo de la fachada con más contraste.

@@ -368,7 +368,7 @@ for(const x of[35.20,35.25]){box(x,x+.03,10.20,11.72,2.34,2.40,'alu',false);box(
  const halo=new THREE.Mesh(new THREE.PlaneGeometry(W*1188/1068,Hh*410/290),new THREE.MeshBasicMaterial({color:0xfff1dc,alphaMap:ht,transparent:true,opacity:.6,blending:THREE.AdditiveBlending,depthWrite:false,toneMapped:false}));
  halo.position.copy(V(43.948,yc,zc));halo.rotation.y=Math.PI/2;scene.add(halo);
  const edge=new THREE.Mesh(new THREE.PlaneGeometry(W,Hh),new THREE.MeshStandardMaterial({color:0x6d7276,map:lt,alphaTest:.35,roughness:.5}));
- edge.position.copy(V(43.975,yc+.008,zc-.01));edge.rotation.y=Math.PI/2;scene.add(edge);
+ edge.material.color.set(0x2b3136);edge.position.copy(V(43.972,yc-.03,zc-.03));edge.scale.set(1.006,1.006,1);edge.rotation.y=Math.PI/2;scene.add(edge);
  const face=new THREE.Mesh(new THREE.PlaneGeometry(W,Hh),new THREE.MeshStandardMaterial({map:lt,emissive:0xffffff,emissiveMap:lt,emissiveIntensity:.6,alphaTest:.35,roughness:.35}));
  face.position.copy(V(43.99,yc,zc));face.rotation.y=Math.PI/2;scene.add(face);}
 // --- Escalera E1 (showroom, PB → P1): 20 contrahuellas de 0.1675

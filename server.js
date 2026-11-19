@@ -270,6 +270,27 @@ app.post('/api/sessions/:sid/save', guard, wrap((req, res) => serial(async () =>
   res.json(v);
 })));
 
+/* ---------- vistas generales (fotografía) ---------- */
+const slug = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'vista';
+const imgOk = (x, max) => typeof x === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(x) && x.length < max;
+app.get('/api/photos', guard, wrap(async (req, res) => res.json(await store.listPhotos(+req.query.version | 0))));
+app.post('/api/photos', guard, wrap(async (req, res) => {
+  const b = req.body || {}, version = +b.version | 0;
+  if (!imgOk(b.image, 12e6)) return res.status(400).json({ error: 'Imagen no válida o demasiado grande.' });
+  if (!(await store.getScene(version))) return res.status(400).json({ error: 'Esa versión de la nave no existe.' });
+  const kind = b.kind === 'std' ? 'std' : 'custom', key = kind === 'std' ? slug(b.key) : 'custom';
+  const m = { version, key, kind, title: String(b.title || 'Vista').slice(0, 80), author: String(b.author || 'Anónimo').slice(0, 60), pose: Array.isArray(b.pose) ? b.pose.slice(0, 8).map(Number) : null, w: +b.w | 0, h: +b.h | 0, mime: b.image.slice(5, b.image.indexOf(';')) };
+  const id = await store.addPhoto(m, b.image.slice(b.image.indexOf(',') + 1), imgOk(b.thumb, 1.5e6) ? b.thumb.slice(b.thumb.indexOf(',') + 1) : null);
+  res.json({ id, ...m });
+}));
+app.get('/photo/:id', guard, wrap(async (req, res) => {
+  const th = req.query.thumb === '1', p = await store.getPhoto(+req.params.id | 0, th); if (!p || !p.b64) return res.status(404).send('No existe');
+  res.type(p.mime).set('Cache-Control', 'private, max-age=86400');
+  if (req.query.dl === '1') res.set('Content-Disposition', `attachment; filename="AdditiumDaVinci16_v${p.version}_${slug(p.title)}.${p.mime.includes('png') ? 'png' : 'jpg'}"`);
+  res.send(Buffer.from(p.b64, 'base64'));
+}));
+app.delete('/api/photos/:id', guard, wrap(async (req, res) => { await store.delPhoto(+req.params.id | 0); res.json({ ok: true }); }));
+
 /* ---------- administración: todas las pruebas del equipo ---------- */
 app.get('/api/admin/sessions', adminGuard, wrap(async (_q, res) => {
   const list = await store.listSessions();

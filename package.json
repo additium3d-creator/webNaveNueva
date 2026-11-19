@@ -1,6 +1,6 @@
 {
   "name": "nave-davinci16",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "Visor 3D de la nave de Leonardo Da Vinci 16 con asistente de cambios y versionado (Additium3D)",
   "type": "module",
